@@ -1,0 +1,11 @@
+text,intent
+hello,greeting
+hi,greeting
+hey there,greeting
+i need help,help
+can you help me,help
+what services do you provide,service_inquiry
+what can you do,service_inquiry
+bye,goodbye
+goodbye,goodbye
+see you,goodbye
