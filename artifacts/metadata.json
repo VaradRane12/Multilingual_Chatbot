@@ -1,0 +1,63 @@
+{
+  "dataset": {
+    "source": "huggingface",
+    "dataset_id": "tuetschek/atis",
+    "train_split": "train",
+    "test_split": "test",
+    "text_column": "text",
+    "intent_column": "intent",
+    "csv_path": "data/intent_dataset.csv",
+    "split_column": "split",
+    "train_ratio": 0.8,
+    "random_state": 42
+  },
+  "model": {
+    "classifier": "svm",
+    "candidate_classifiers": [
+      "svm",
+      "logreg",
+      "naive_bayes",
+      "random_forest"
+    ],
+    "max_features": 20000,
+    "detector_backend": "langdetect",
+    "tokenizer": "whitespace",
+    "stopwords": "nltk",
+    "normalize": "regex"
+  },
+  "sample_count": 4978,
+  "intent_count": 22,
+  "best_classifier": "svm",
+  "comparison": [
+    {
+      "classifier": "svm",
+      "accuracy": 0.9485,
+      "macro_f1": 0.641,
+      "report": "                   precision    recall  f1-score   support\n\n     abbreviation       1.00      1.00      1.00        33\n         aircraft       0.62      0.89      0.73         9\n          airfare       0.92      0.98      0.95        48\n   airfare+flight       0.00      0.00      0.00         1\n          airline       1.00      0.89      0.94        38\n          airport       1.00      0.89      0.94        18\n         capacity       1.00      0.81      0.89        21\n             city       1.00      0.67      0.80         6\n         day_name       0.00      0.00      0.00         2\n         distance       1.00      1.00      1.00        10\n           flight       0.96      0.99      0.97       632\n   flight+airfare       0.80      0.33      0.47        12\n   flight+airline       0.00      0.00      0.00         1\n        flight_no       1.00      0.62      0.77         8\nflight_no+airline       0.00      0.00      0.00         1\n      flight_time       1.00      1.00      1.00         1\n      ground_fare       1.00      0.71      0.83         7\n   ground_service       0.95      1.00      0.97        36\n             meal       0.00      0.00      0.00         6\n         quantity       0.38      1.00      0.55         3\n\n         accuracy                           0.95       893\n        macro avg       0.68      0.64      0.64       893\n     weighted avg       0.94      0.95      0.94       893\n"
+    },
+    {
+      "classifier": "logreg",
+      "accuracy": 0.9127,
+      "macro_f1": 0.457,
+      "report": "                   precision    recall  f1-score   support\n\n     abbreviation       1.00      1.00      1.00        33\n         aircraft       0.67      0.89      0.76         9\n          airfare       0.91      0.90      0.91        48\n   airfare+flight       0.00      0.00      0.00         1\n          airline       1.00      0.82      0.90        38\n          airport       1.00      0.56      0.71        18\n         capacity       1.00      0.71      0.83        21\n             city       0.00      0.00      0.00         6\n         day_name       0.00      0.00      0.00         2\n         distance       1.00      0.60      0.75        10\n           flight       0.91      0.99      0.95       632\n   flight+airfare       1.00      0.08      0.15        12\n   flight+airline       0.00      0.00      0.00         1\n        flight_no       0.00      0.00      0.00         8\nflight_no+airline       0.00      0.00      0.00         1\n      flight_time       0.00      0.00      0.00         1\n      ground_fare       1.00      0.57      0.73         7\n   ground_service       0.97      1.00      0.99        36\n             meal       0.00      0.00      0.00         6\n         quantity       0.30      1.00      0.46         3\n\n         accuracy                           0.91       893\n        macro avg       0.54      0.46      0.46       893\n     weighted avg       0.90      0.91      0.89       893\n"
+    },
+    {
+      "classifier": "naive_bayes",
+      "accuracy": 0.7951,
+      "macro_f1": 0.1802,
+      "report": "                   precision    recall  f1-score   support\n\n     abbreviation       1.00      0.73      0.84        33\n         aircraft       0.50      0.11      0.18         9\n          airfare       0.44      0.08      0.14        48\n   airfare+flight       0.00      0.00      0.00         1\n          airline       1.00      0.50      0.67        38\n          airport       0.00      0.00      0.00        18\n         capacity       0.00      0.00      0.00        21\n             city       0.00      0.00      0.00         6\n         day_name       0.00      0.00      0.00         2\n         distance       0.00      0.00      0.00        10\n           flight       0.78      1.00      0.88       632\n   flight+airfare       0.00      0.00      0.00        12\n   flight+airline       0.00      0.00      0.00         1\n        flight_no       0.00      0.00      0.00         8\nflight_no+airline       0.00      0.00      0.00         1\n      flight_time       0.00      0.00      0.00         1\n      ground_fare       0.00      0.00      0.00         7\n   ground_service       0.97      0.83      0.90        36\n             meal       0.00      0.00      0.00         6\n         quantity       0.00      0.00      0.00         3\n\n         accuracy                           0.80       893\n        macro avg       0.23      0.16      0.18       893\n     weighted avg       0.70      0.80      0.73       893\n"
+    },
+    {
+      "classifier": "random_forest",
+      "accuracy": 0.9194,
+      "macro_f1": 0.4755,
+      "report": "                   precision    recall  f1-score   support\n\n     abbreviation       0.94      1.00      0.97        33\n         aircraft       0.57      0.89      0.70         9\n          airfare       0.90      0.96      0.93        48\n   airfare+flight       0.00      0.00      0.00         1\n          airline       1.00      0.79      0.88        38\n          airport       1.00      0.78      0.88        18\n         capacity       1.00      0.67      0.80        21\n             city       1.00      0.17      0.29         6\n         day_name       0.00      0.00      0.00         2\n         distance       1.00      0.40      0.57        10\n           flight       0.92      0.99      0.95       632\n   flight+airfare       1.00      0.17      0.29        12\n   flight+airline       0.00      0.00      0.00         1\n        flight_no       0.00      0.00      0.00         8\nflight_no+airline       0.00      0.00      0.00         1\n      flight_time       0.00      0.00      0.00         1\n      ground_fare       1.00      0.57      0.73         7\n   ground_service       0.97      1.00      0.99        36\n             meal       0.00      0.00      0.00         6\n         quantity       0.38      1.00      0.55         3\n\n         accuracy                           0.92       893\n        macro avg       0.58      0.47      0.48       893\n     weighted avg       0.91      0.92      0.90       893\n"
+    }
+  ],
+  "classifier_artifacts": {
+    "svm": "artifacts/classifiers/svm.joblib",
+    "logreg": "artifacts/classifiers/logreg.joblib",
+    "naive_bayes": "artifacts/classifiers/naive_bayes.joblib",
+    "random_forest": "artifacts/classifiers/random_forest.joblib"
+  }
+}
