@@ -1,0 +1,26 @@
+{
+  "dataset": {
+    "source": "huggingface",
+    "dataset_id": "tuetschek/atis",
+    "train_split": "train",
+    "test_split": "test",
+    "text_column": "text",
+    "intent_column": "intent",
+    "csv_path": "data/intent_dataset.csv",
+    "split_column": "split",
+    "train_ratio": 0.8,
+    "random_state": 42
+  },
+  "model": {
+    "classifier": "svm",
+    "candidate_classifiers": ["svm", "logreg", "naive_bayes", "random_forest"],
+    "max_features": 20000,
+    "detector_backend": "langdetect",
+    "tokenizer": "whitespace",
+    "stopwords": "nltk",
+    "normalize": "regex"
+  },
+  "runtime": {
+    "artifacts_dir": "artifacts"
+  }
+}
