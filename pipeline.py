@@ -1,12 +1,16 @@
 """
 Multilingual Chatbot Pipeline
-Stages: Language Detection → Preprocessing → Feature Representation
-        → Intent Classification → Machine Translation
+Stages: Language Detection → Translation to English → Preprocessing
+    → Feature Representation → Intent Classification → Reply Generation
+    → Machine Translation
 """
 
 import re
 import time
+import json
+import csv
 import warnings
+from pathlib import Path
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────
@@ -409,6 +413,80 @@ class Translator:
 
 
 # ─────────────────────────────────────────────
+# STAGE 06: Reply Generation
+# ─────────────────────────────────────────────
+
+class ReplyGenerator:
+    """Create a short English reply from the predicted intent."""
+
+    TEMPLATES = {
+        "flight": "I can help with flight bookings. Please share the origin, destination, and travel date.",
+        "airfare": "I can help with fare information. Which route would you like to check?",
+        "quantity": "I can help with quantity details. What exactly do you want to know?",
+        "ground_service": "I can help with ground service details. Which airport or city are you asking about?",
+        "capacity": "I can help with aircraft capacity. Which flight or aircraft should I check?",
+        "aircraft": "I can help with aircraft information. Tell me the airline or flight number.",
+        "airline": "I can help with airline details. Which airline are you asking about?",
+        "airport": "I can help with airport information. Which city or airport do you want?",
+        "meal": "I can help with meal information. Tell me the airline or flight route.",
+        "flight_time": "I can help with flight times. Please share the route and travel date.",
+        "distance": "I can help with distance information. Which two cities do you want to compare?",
+        "restriction": "I can help with travel restrictions. Please share the route or airline.",
+        "cheapest": "I can help find cheaper options. Which route are you comparing?",
+        "city": "I can help with city-related travel details. Which city do you mean?",
+        "abbreviation": "I can help explain abbreviations. Which one do you want me to decode?",
+        "flight_no": "I can help with flight numbers. Please share the airline or route.",
+        "ground_fare": "I can help with ground fare details. Which city or airport are you asking about?",
+        "airline+flight_no": "I can help with airline and flight number details. Please share the route or airline.",
+        "aircraft+flight+flight_no": "I can help with aircraft, flight, and flight number details. Please share the route.",
+        "airfare+flight_time": "I can help with fare and flight time details. Which route should I check?",
+        "flight+airfare": "I can help with flight and fare details. Please share the route and travel date.",
+        "ground_service+ground_fare": "I can help with ground service and fare details. Which city or airport are you asking about?",
+    }
+
+    def __init__(self, templates_path: str = None):
+        self.templates = dict(self.TEMPLATES)
+        if templates_path:
+            loaded = self._load_templates(templates_path)
+            if loaded:
+                self.templates = loaded
+
+    def _load_templates(self, templates_path: str) -> dict:
+        path = Path(templates_path)
+        if not path.exists():
+            return {}
+
+        suffix = path.suffix.lower()
+        try:
+            if suffix == ".json":
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return {str(k): str(v) for k, v in data.items() if str(k).strip() and str(v).strip()}
+
+            if suffix == ".csv":
+                templates = {}
+                with open(path, "r", encoding="utf-8", newline="") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        intent = (row.get("intent") or "").strip()
+                        reply = (row.get("reply") or "").strip()
+                        if intent and reply:
+                            templates[intent] = reply
+                return templates
+        except Exception:
+            return {}
+
+        return {}
+
+    def build(self, intent: str) -> str:
+        return self.templates.get(
+            intent,
+            f"I understood this as a {intent.replace('_', ' ')} request. Can you share a bit more detail?",
+        )
+
+
+# ─────────────────────────────────────────────
 # Full end-to-end pipeline
 # ─────────────────────────────────────────────
 
@@ -422,13 +500,31 @@ class MultilingualChatbotPipeline:
                  preprocessor: TextPreprocessor = None,
                  extractor:  FeatureExtractor  = None,
                  classifier: IntentClassifier  = None,
-                 translator: Translator        = None):
+                 translator: Translator        = None,
+                 reply_templates_path: str     = None):
 
         self.detector     = detector     or LanguageDetector(backend="langdetect")
         self.preprocessor = preprocessor or TextPreprocessor()
         self.extractor    = extractor    or FeatureExtractor(method="tfidf")
         self.classifier   = classifier   # optional — set after fit()
         self.translator   = translator   # optional — heavy, load on demand
+        self.reply_generator = ReplyGenerator(reply_templates_path)
+
+    def _build_reply(self, intent: str, src_lang: str, tgt_lang: str | None) -> dict:
+        reply_english = self.reply_generator.build(intent)
+        reply_text = reply_english
+        reply_translation = None
+
+        if self.translator and tgt_lang and tgt_lang != "en":
+            reply_translation = self.translator.translate(reply_english, "en", tgt_lang)
+            reply_text = reply_translation["translation"]
+
+        return {
+            "reply_english": reply_english,
+            "reply": reply_text,
+            "reply_translation": reply_translation,
+            "reply_language": tgt_lang or src_lang,
+        }
 
     def run(self, text: str, tgt_lang: str = None) -> dict:
         result = {}
@@ -436,6 +532,7 @@ class MultilingualChatbotPipeline:
         # Stage 1: Detect input language
         result["detection"] = self.detector.detect(text)
         src_lang = result["detection"]["lang"]
+        reply_target_lang = tgt_lang or src_lang
 
         # Stage 2: Translate to English if input is not English (needed for ML pipeline)
         pipeline_text = text  # text to use for feature extraction
@@ -459,10 +556,11 @@ class MultilingualChatbotPipeline:
         if self.classifier:
             vecs, _ = self.extractor.transform([clean_text])
             result["intent"] = self.classifier.predict(vecs)[0]
+            result.update(self._build_reply(result["intent"], src_lang, reply_target_lang))
 
-        # Stage 6: Translate response back to user language
-        if self.translator and tgt_lang:
-            result["translation"] = self.translator.translate(text, src_lang, tgt_lang)
+        # Stage 6: keep translation metadata for the UI
+        if self.translator and reply_target_lang:
+            result["translation"] = self.translator.translate(text, src_lang, reply_target_lang)
 
         return result
 

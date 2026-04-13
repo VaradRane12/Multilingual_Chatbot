@@ -259,6 +259,7 @@ def experiment_end_to_end():
         tokens = res["preprocessing"]["token_count"]
         print(f"  Query  : {q}")
         print(f"  Lang   : {lang}  |  Tokens: {tokens}  |  Intent: {intent}")
+        print(f"  Reply  : {res.get('reply', 'n/a')}")
         print()
 
 

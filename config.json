@@ -21,6 +21,7 @@
     "normalize": "regex"
   },
   "runtime": {
-    "artifacts_dir": "artifacts"
+    "artifacts_dir": "artifacts",
+    "reply_templates_path": "replies.json"
   }
 }

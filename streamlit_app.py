@@ -90,9 +90,12 @@ def generate_response_variants(result: dict) -> dict:
 
 
 def build_assistant_reply(result: dict, response_style: str) -> str:
-    variants = generate_response_variants(result)
-    source_language = variants.pop("source_language", "unknown")
-    reply = variants.get(response_style, variants["fallback"])
+    source_language = result.get("detection", {}).get("lang", "unknown")
+    reply = result.get("reply")
+    if not reply:
+        variants = generate_response_variants(result)
+        source_language = variants.pop("source_language", source_language)
+        reply = variants.get(response_style, variants["fallback"])
     return reply, source_language
 
 
@@ -132,6 +135,7 @@ def get_cached_pipeline(classifier_name: str | None = None) -> MultilingualChatb
         extractor=extractor,
         classifier=classifier,
         translator=translator,
+        reply_templates_path=runtime_cfg.get("reply_templates_path", "replies.json"),
     )
 
 
@@ -212,6 +216,8 @@ def main() -> None:
                     st.write(sample_variants["contextual"])
                 st.markdown("**Fallback**")
                 st.write(sample_variants["fallback"])
+                st.markdown("**Bot reply**")
+                st.write(sample_result.get("reply", "No reply generated."))
 
                 with st.expander("Full JSON output"):
                     st.json(sample_result)
@@ -233,7 +239,6 @@ def main() -> None:
                     chat_result,
                     st.session_state.response_style,
                 )
-                assistant_reply = f"{assistant_reply}"
                 st.session_state.chat_messages.append({"role": "assistant", "content": assistant_reply})
 
             with st.expander("Last turn details"):
