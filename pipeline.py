@@ -323,26 +323,79 @@ class Translator:
         "mbart50":   "facebook/mbart-large-50-many-to-many-mmt",
     }
 
+    NLLB_CODE_MAP = {
+        "en": "eng_Latn",
+        "hi": "hin_Deva",
+        "mr": "mar_Deva",
+        "fr": "fra_Latn",
+        "es": "spa_Latn",
+        "de": "deu_Latn",
+        "it": "ita_Latn",
+        "pt": "por_Latn",
+    }
+
+    MBART_CODE_MAP = {
+        "en": "en_XX",
+        "hi": "hi_IN",
+        "fr": "fr_XX",
+        "es": "es_XX",
+        "de": "de_DE",
+        "it": "it_IT",
+        "pt": "pt_XX",
+    }
+
     def __init__(self, model: str = "nllb-600M", device: str = "cpu"):
         self.model_key = model
         self.device    = device
         self._pipe     = None
+        self._hf_model = None
+        self._hf_tokenizer = None
         self._load()
 
     def _load(self):
         if self.model_key in self.MODEL_IDS:
-            from transformers import pipeline as hf_pipeline
-            self._pipe = hf_pipeline(
-                "translation",
-                model=self.MODEL_IDS[self.model_key],
-                device=0 if self.device == "cuda" else -1,
-            )
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+            model_id = self.MODEL_IDS[self.model_key]
+            self._hf_tokenizer = AutoTokenizer.from_pretrained(model_id)
+            self._hf_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         elif self.model_key == "opus-mt":
             # Loaded per language pair in translate()
             pass
         elif self.model_key == "google":
             from googletrans import Translator as GTranslator
             self._gtrans = GTranslator()
+
+    def _to_nllb_code(self, code: str) -> str:
+        if not code:
+            return "eng_Latn"
+        if "_" in code and len(code) >= 8:
+            return code
+        return self.NLLB_CODE_MAP.get(code.lower(), "eng_Latn")
+
+    def _to_mbart_code(self, code: str) -> str:
+        if not code:
+            return "en_XX"
+        if "_" in code and len(code) >= 4:
+            return code
+        return self.MBART_CODE_MAP.get(code.lower(), "en_XX")
+
+    def _get_forced_bos_token_id(self, tgt_lang_code: str) -> int:
+        tokenizer = self._hf_tokenizer
+        if tokenizer is None:
+            raise RuntimeError("Tokenizer is not loaded")
+
+        if hasattr(tokenizer, "lang_code_to_id") and getattr(tokenizer, "lang_code_to_id"):
+            mapping = getattr(tokenizer, "lang_code_to_id")
+            if tgt_lang_code in mapping:
+                return int(mapping[tgt_lang_code])
+
+        if hasattr(tokenizer, "get_lang_id"):
+            return int(tokenizer.get_lang_id(tgt_lang_code))
+
+        token_id = tokenizer.convert_tokens_to_ids(tgt_lang_code)
+        if token_id is None:
+            raise ValueError(f"Unsupported target language code: {tgt_lang_code}")
+        return int(token_id)
 
     def translate(self, text: str, src_lang: str, tgt_lang: str) -> dict:
         """
@@ -352,18 +405,34 @@ class Translator:
         start = time.perf_counter()
 
         if self.model_key in ("nllb-600M", "nllb-1.3B"):
-            out = self._pipe(text,
-                             src_lang=src_lang,
-                             tgt_lang=tgt_lang,
-                             max_length=512)
-            translation = out[0]["translation_text"]
+            import torch
+            src = self._to_nllb_code(src_lang)
+            tgt = self._to_nllb_code(tgt_lang)
+            self._hf_tokenizer.src_lang = src
+            encoded = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+            forced_bos_token_id = self._get_forced_bos_token_id(tgt)
+            with torch.no_grad():
+                generated = self._hf_model.generate(
+                    **encoded,
+                    forced_bos_token_id=forced_bos_token_id,
+                    max_length=512,
+                )
+            translation = self._hf_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
 
         elif self.model_key == "mbart50":
-            out = self._pipe(text,
-                             src_lang=src_lang,
-                             tgt_lang=tgt_lang,
-                             max_length=512)
-            translation = out[0]["translation_text"]
+            import torch
+            src = self._to_mbart_code(src_lang)
+            tgt = self._to_mbart_code(tgt_lang)
+            self._hf_tokenizer.src_lang = src
+            encoded = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+            forced_bos_token_id = self._get_forced_bos_token_id(tgt)
+            with torch.no_grad():
+                generated = self._hf_model.generate(
+                    **encoded,
+                    forced_bos_token_id=forced_bos_token_id,
+                    max_length=512,
+                )
+            translation = self._hf_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
 
         elif self.model_key == "opus-mt":
             from transformers import MarianMTModel, MarianTokenizer

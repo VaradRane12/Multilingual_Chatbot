@@ -39,12 +39,9 @@ def humanize_intent(intent: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def get_translator():
-    try:
-        from googletrans import Translator
+    from pipeline import Translator
 
-        return Translator()
-    except Exception:
-        return None
+    return Translator(model="nllb-600M")
 
 
 def translate_text(text: str, target_lang: str | None) -> str:
@@ -56,7 +53,8 @@ def translate_text(text: str, target_lang: str | None) -> str:
         return text
 
     try:
-        return translator.translate(text, dest=target_lang).text
+        result = translator.translate(text, "en", target_lang)
+        return result.get("translation", text)
     except Exception:
         return text
 
@@ -119,8 +117,8 @@ def get_cached_pipeline(classifier_name: str | None = None) -> MultilingualChatb
     extractor = joblib.load(extractor_path)
     classifier = joblib.load(classifier_path)
     
-    # Initialize translator for input → English translation
-    translator = Translator(model="google")
+    # Use NLLB-200 distilled model for multilingual translation.
+    translator = Translator(model="nllb-600M")
 
     return MultilingualChatbotPipeline(
         detector=LanguageDetector(backend=model_cfg.get("detector_backend", "langdetect")),
