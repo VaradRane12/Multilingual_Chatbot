@@ -22,6 +22,9 @@
   },
   "runtime": {
     "artifacts_dir": "artifacts",
-    "reply_templates_path": "replies.json"
+    "reply_templates_path": "replies.json",
+    "catalog_path": "travel_catalog.csv",
+    "use_ollama": true,
+    "ollama_model": "llama3"
   }
 }

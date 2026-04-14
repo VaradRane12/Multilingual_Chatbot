@@ -1,0 +1,12 @@
+type,id,name,from_city,to_city,city,date,time,price,availability,notes
+flight,F001,Air India 101,Boston,Denver,,,2026-04-15,08:30,420,Yes,Morning direct flight
+flight,F002,Delta 202,Boston,Denver,,,2026-04-15,18:45,390,Yes,Evening direct flight
+flight,F003,United 303,New York,Chicago,,,2026-04-16,11:20,180,Yes,Short hop flight
+flight,F004,IndiGo 404,Delhi,Mumbai,,,2026-04-16,14:10,150,Yes,Daily domestic flight
+flight,F005,Emirates 505,Dubai,London,,,2026-04-17,22:00,710,Yes,International flight
+hotel,H001,Grand Plaza,,,Boston,,,220,Yes,Near airport
+hotel,H002,City Inn,,,Denver,,,180,Yes,City center hotel
+hotel,H003,Metro Stay,,,Mumbai,,,95,Yes,Budget hotel
+hotel,H004,River View,,,Delhi,,,130,Yes,Business hotel
+hotel,H005,Sunset Lodge,,,London,,,260,Yes,Family hotel
+hotel,H006,Pune Palace,,,Pune,,,320,Yes,Central location

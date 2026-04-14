@@ -1,571 +1,347 @@
-"""
-Multilingual Chatbot Pipeline
-Stages: Language Detection → Translation to English → Preprocessing
-    → Feature Representation → Intent Classification → Reply Generation
-    → Machine Translation
+"""Simple multilingual chatbot pipeline.
+
+Flow:
+1. Detect language
+2. Translate input to English
+3. Clean text
+4. TF-IDF features
+5. Intent classification
+6. Build reply
+7. Translate reply back to the input language
 """
 
+from pathlib import Path
+import csv
+import json
 import re
 import time
-import json
-import csv
-import warnings
-from pathlib import Path
-warnings.filterwarnings("ignore")
+import urllib.request
 
-# ─────────────────────────────────────────────
-# STAGE 01: Language Identification
-# ─────────────────────────────────────────────
+from langdetect import detect, DetectorFactory
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import LabelEncoder
+from googletrans import Translator as GoogleTranslator
+
+DetectorFactory.seed = 42
+
 
 class LanguageDetector:
-    """
-    Wraps multiple language detection backends so you can swap and compare.
-    Supported: 'fasttext', 'langdetect', 'langid'
-    """
-
-    def __init__(self, backend: str = "fasttext", model_path: str = None):
-        self.backend = backend
-        self._load(model_path)
-
-    def _load(self, model_path):
-        if self.backend == "fasttext":
-            try:
-                import fasttext
-                path = model_path or "lid.176.ftz"   # download from fastText releases
-                self.model = fasttext.load_model(path)
-            except Exception as e:
-                print(f"[LanguageDetector] fasttext load failed ({e}). Falling back to langdetect.")
-                self.backend = "langdetect"
-                self._load(None)
-
-        elif self.backend == "langdetect":
-            from langdetect import detect, DetectorFactory
-            DetectorFactory.seed = 42          # reproducibility
-            self._detect_fn = detect
-
-        elif self.backend == "langid":
-            import langid
-            self._detect_fn = lambda text: langid.classify(text)[0]
-
-        else:
-            raise ValueError(f"Unknown backend: {self.backend}")
-
     def detect(self, text: str) -> dict:
         start = time.perf_counter()
-        try:
-            if self.backend == "fasttext":
-                labels, probs = self.model.predict(text.replace("\n", " "), k=1)
-                lang = labels[0].replace("__label__", "")
-                confidence = float(probs[0])
-            else:
-                lang = self._detect_fn(text)
-                confidence = None          # langdetect/langid don't expose probability easily
-        except Exception:
-            lang, confidence = "unknown", 0.0
-
+        lang = detect(text)
         latency_ms = (time.perf_counter() - start) * 1000
-        return {"lang": lang, "confidence": confidence, "latency_ms": round(latency_ms, 2)}
+        return {"lang": lang, "latency_ms": round(latency_ms, 2)}
 
-
-# ─────────────────────────────────────────────
-# STAGE 02: Text Preprocessing
-# ─────────────────────────────────────────────
 
 class TextPreprocessor:
-    """
-    Configurable preprocessing:
-      tokenizer  : 'whitespace' | 'spacy' | 'sentencepiece'
-      stopwords  : 'nltk' | 'none' | 'custom'
-      normalize  : 'regex' | 'unicode' | 'full'
-    """
-
-    EMOJI_RE  = re.compile("["
-        u"\U0001F600-\U0001F64F"
-        u"\U0001F300-\U0001F5FF"
-        u"\U0001F680-\U0001F6FF"
-        u"\U0001F1E0-\U0001F1FF"
-        "]+", flags=re.UNICODE)
-    URL_RE    = re.compile(r"https?://\S+|www\.\S+")
-    MENTION_RE = re.compile(r"@\w+")
-
-    def __init__(self,
-                 tokenizer: str = "whitespace",
-                 stopwords: str = "nltk",
-                 normalize: str = "regex",
-                 lang: str = "english",
-                 custom_stopwords: list = None):
-
-        self.tokenizer  = tokenizer
-        self.stopwords  = stopwords
-        self.normalize  = normalize
-        self.lang       = lang
-        self._stop_set  = self._build_stopset(custom_stopwords)
-        self._nlp       = None
-        self._sp_model  = None
-
-        if tokenizer == "spacy":
-            self._load_spacy()
-        elif tokenizer == "sentencepiece":
-            self._load_sp()
-
-    def _build_stopset(self, custom):
-        if self.stopwords == "none":
-            return set()
-        if self.stopwords == "custom" and custom:
-            return set(custom)
-        try:
-            from nltk.corpus import stopwords as sw
-            import nltk
-            nltk.download("stopwords", quiet=True)
-            return set(sw.words(self.lang))
-        except Exception:
-            return set()
-
-    def _load_spacy(self):
-        try:
-            import spacy
-            self._nlp = spacy.load("xx_ent_wiki_sm")   # multilingual
-        except Exception:
-            print("[Preprocessor] spaCy model not found; falling back to whitespace.")
-            self.tokenizer = "whitespace"
-
-    def _load_sp(self):
-        try:
-            import sentencepiece as spm
-            m = spm.SentencePieceProcessor()
-            m.Load("spm.model")                        # provide your own .model file
-            self._sp_model = m
-        except Exception:
-            print("[Preprocessor] SentencePiece model not found; falling back to whitespace.")
-            self.tokenizer = "whitespace"
-
-    # ── normalization ──────────────────────────
-
-    def _normalize(self, text: str) -> str:
-        if self.normalize in ("regex", "full"):
-            text = self.URL_RE.sub(" <URL> ", text)
-            text = self.EMOJI_RE.sub(" <EMOJI> ", text)
-            text = self.MENTION_RE.sub(" <MENTION> ", text)
-        if self.normalize in ("unicode", "full"):
-            import unicodedata
-            text = unicodedata.normalize("NFKC", text)
-        if self.normalize == "full":
-            text = text.lower()
-        return text.strip()
-
-    # ── tokenization ──────────────────────────
-
-    def _tokenize(self, text: str) -> list:
-        if self.tokenizer == "spacy" and self._nlp:
-            import nltk
-            nltk.download("wordnet", quiet=True)
-            doc = self._nlp(text)
-            return [t.lemma_ for t in doc if not t.is_space]
-        if self.tokenizer == "sentencepiece" and self._sp_model:
-            return self._sp_model.EncodeAsPieces(text)
-        # default: whitespace
-        return text.split()
-
-    # ── main entry ─────────────────────────────
-
     def process(self, text: str) -> dict:
         start = time.perf_counter()
-        normalized = self._normalize(text)
-        tokens = self._tokenize(normalized)
-        tokens = [t for t in tokens if t.lower() not in self._stop_set and len(t) > 1]
+        text = text.lower()
+        text = re.sub(r"https?://\S+|www\.\S+", " ", text)
+        text = re.sub(r"[^\w\s]", " ", text)
+        tokens = [token for token in text.split() if len(token) > 1]
         latency_ms = (time.perf_counter() - start) * 1000
         return {
             "original": text,
-            "normalized": normalized,
             "tokens": tokens,
             "token_count": len(tokens),
             "latency_ms": round(latency_ms, 2),
         }
 
 
-# ─────────────────────────────────────────────
-# STAGE 03: Feature Representation
-# ─────────────────────────────────────────────
-
 class FeatureExtractor:
-    """
-    method: 'tfidf' | 'fasttext_avg' | 'sentence_transformer'
-    For sentence_transformer, model_name controls which checkpoint to load.
-    """
+    def __init__(self, max_features: int = 20000):
+        self.vectorizer = TfidfVectorizer(max_features=max_features, ngram_range=(1, 2))
+        # Keep the old attribute name so previously saved artifacts still work.
+        self._vectorizer = self.vectorizer
 
-    def __init__(self, method: str = "tfidf",
-                 max_features: int = 20_000,
-                 model_name: str = "LaBSE"):
-        self.method       = method
-        self.max_features = max_features
-        self.model_name   = model_name
-        self._vectorizer  = None
-        self._ft_model    = None
-        self._st_model    = None
+    def fit(self, texts: list[str]):
+        self.vectorizer.fit(texts)
+        self._vectorizer = self.vectorizer
 
-    # ── fit (call once on training corpus) ────
-
-    def fit(self, corpus: list):
-        if self.method == "tfidf":
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            self._vectorizer = TfidfVectorizer(
-                max_features=self.max_features,
-                sublinear_tf=True,
-                ngram_range=(1, 2),
-                analyzer="word",
-            )
-            self._vectorizer.fit(corpus)
-
-        elif self.method == "fasttext_avg":
-            import fasttext
-            # expects a pre-trained multilingual fasttext model
-            self._ft_model = fasttext.load_model("cc.en.300.bin")
-
-        elif self.method == "sentence_transformer":
-            from sentence_transformers import SentenceTransformer
-            self._st_model = SentenceTransformer(self.model_name)
-
-        return self
-
-    # ── transform ─────────────────────────────
-
-    def transform(self, texts: list):
-        import numpy as np
+    def transform(self, texts: list[str]):
         start = time.perf_counter()
-
-        if self.method == "tfidf":
-            if self._vectorizer is None:
-                raise RuntimeError("Call fit() before transform().")
-            vecs = self._vectorizer.transform(texts)
-
-        elif self.method == "fasttext_avg":
-            vecs = np.vstack([
-                np.mean([self._ft_model.get_word_vector(w)
-                         for w in t.split()] or [np.zeros(300)], axis=0)
-                for t in texts
-            ])
-
-        elif self.method == "sentence_transformer":
-            vecs = self._st_model.encode(texts, show_progress_bar=False)
-
+        vectorizer = getattr(self, "vectorizer", None)
+        if vectorizer is None:
+            vectorizer = getattr(self, "_vectorizer")
+        vectors = vectorizer.transform(texts)
         latency_ms = (time.perf_counter() - start) * 1000
-        return vecs, round(latency_ms, 2)
+        return vectors, round(latency_ms, 2)
 
-    def fit_transform(self, corpus: list):
-        self.fit(corpus)
-        return self.transform(corpus)
-
-
-# ─────────────────────────────────────────────
-# STAGE 04: Intent Classification
-# ─────────────────────────────────────────────
 
 class IntentClassifier:
-    """
-    classifier: 'svm' | 'logreg' | 'naive_bayes' | 'random_forest' | 'mbert'
-    """
-
-    CLASSIFIERS = {
-        "svm":          ("sklearn.svm",                   "LinearSVC",        {"C": 1.0, "max_iter": 2000}),
-        "logreg":       ("sklearn.linear_model",          "LogisticRegression", {"max_iter": 1000, "C": 5.0}),
-        "naive_bayes":  ("sklearn.naive_bayes",           "MultinomialNB",    {}),
-        "random_forest":("sklearn.ensemble",              "RandomForestClassifier", {"n_estimators": 200, "n_jobs": -1}),
-    }
-
-    def __init__(self, classifier: str = "svm"):
-        self.classifier = classifier
-        self._model     = None
-        self._label_enc = None
-        self._build()
-
-    def _build(self):
-        if self.classifier == "mbert":
-            # Placeholder: wire in your fine-tuning loop here
-            # e.g. HuggingFace Trainer with bert-base-multilingual-cased
-            raise NotImplementedError(
-                "mBERT fine-tuning requires a HuggingFace Trainer setup. "
-                "See experiments.py run_intent_mbert() for a skeleton."
-            )
-        module_path, cls_name, kwargs = self.CLASSIFIERS[self.classifier]
-        import importlib
-        mod = importlib.import_module(module_path)
-        self._model = getattr(mod, cls_name)(**kwargs)
-
-    def fit(self, X, y):
-        from sklearn.preprocessing import LabelEncoder
+    def __init__(self):
+        self._model = LogisticRegression(max_iter=1000)
         self._label_enc = LabelEncoder()
-        y_enc = self._label_enc.fit_transform(y)
-        self._model.fit(X, y_enc)
-        return self
 
-    def predict(self, X) -> list:
-        preds = self._model.predict(X)
-        return self._label_enc.inverse_transform(preds).tolist()
+    def fit(self, vectors, intents: list[str]):
+        encoded_intents = self._label_enc.fit_transform(intents)
+        self._model.fit(vectors, encoded_intents)
 
-    def evaluate(self, X, y_true) -> dict:
-        from sklearn.metrics import accuracy_score, f1_score, classification_report
-        y_pred = self.predict(X)
-        return {
-            "accuracy":  round(accuracy_score(y_true, y_pred), 4),
-            "macro_f1":  round(f1_score(y_true, y_pred, average="macro"), 4),
-            "report":    classification_report(y_true, y_pred),
-        }
+    def predict(self, vectors) -> str:
+        prediction = self._model.predict(vectors)[0]
+        return self._label_enc.inverse_transform([prediction])[0]
 
-
-# ─────────────────────────────────────────────
-# STAGE 05: Machine Translation
-# ─────────────────────────────────────────────
 
 class Translator:
-    """
-    model: 'nllb-600M' | 'nllb-1.3B' | 'mbart50' | 'opus-mt' | 'google'
-    """
+    def __init__(self):
+        self.client = GoogleTranslator()
 
-    MODEL_IDS = {
-        "nllb-600M": "facebook/nllb-200-distilled-600M",
-        "nllb-1.3B": "facebook/nllb-200-1.3B",
-        "mbart50":   "facebook/mbart-large-50-many-to-many-mmt",
-    }
-
-    def __init__(self, model: str = "nllb-600M", device: str = "cpu"):
-        self.model_key = model
-        self.device    = device
-        self._pipe     = None
-        self._load()
-
-    def _load(self):
-        if self.model_key in self.MODEL_IDS:
-            from transformers import pipeline as hf_pipeline
-            self._pipe = hf_pipeline(
-                "translation",
-                model=self.MODEL_IDS[self.model_key],
-                device=0 if self.device == "cuda" else -1,
-            )
-        elif self.model_key == "opus-mt":
-            # Loaded per language pair in translate()
-            pass
-        elif self.model_key == "google":
-            from googletrans import Translator as GTranslator
-            self._gtrans = GTranslator()
-
-    def translate(self, text: str, src_lang: str, tgt_lang: str) -> dict:
-        """
-        NLLB language codes: e.g. 'eng_Latn', 'hin_Deva', 'fra_Latn'
-        mBART codes: 'en_XX', 'hi_IN', 'fr_XX'
-        """
-        start = time.perf_counter()
-
-        if self.model_key in ("nllb-600M", "nllb-1.3B"):
-            out = self._pipe(text,
-                             src_lang=src_lang,
-                             tgt_lang=tgt_lang,
-                             max_length=512)
-            translation = out[0]["translation_text"]
-
-        elif self.model_key == "mbart50":
-            out = self._pipe(text,
-                             src_lang=src_lang,
-                             tgt_lang=tgt_lang,
-                             max_length=512)
-            translation = out[0]["translation_text"]
-
-        elif self.model_key == "opus-mt":
-            from transformers import MarianMTModel, MarianTokenizer
-            pair = f"{src_lang[:2]}-{tgt_lang[:2]}"
-            model_name = f"Helsinki-NLP/opus-mt-{pair}"
-            tok   = MarianTokenizer.from_pretrained(model_name)
-            model = MarianMTModel.from_pretrained(model_name)
-            ids   = tok([text], return_tensors="pt", padding=True)
-            translation = tok.decode(model.generate(**ids)[0],
-                                     skip_special_tokens=True)
-
-        elif self.model_key == "google":
-            result = self._gtrans.translate(text, src=src_lang, dest=tgt_lang)
-            translation = result.text
-
-        else:
-            translation = text   # passthrough for unknown
-
-        latency_ms = (time.perf_counter() - start) * 1000
-        return {
-            "source":      text,
-            "translation": translation,
-            "src_lang":    src_lang,
-            "tgt_lang":    tgt_lang,
-            "latency_ms":  round(latency_ms, 2),
-        }
-
-    @staticmethod
-    def bleu(hypothesis: str, reference: str) -> float:
-        """Quick sentence-level BLEU (sacrebleu)."""
-        try:
-            from sacrebleu.metrics import BLEU
-            metric = BLEU(effective_order=True)
-            return round(metric.sentence_score(hypothesis, [reference]).score, 2)
-        except ImportError:
-            from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-            import nltk
-            nltk.download("punkt", quiet=True)
-            ref_tokens  = reference.split()
-            hyp_tokens  = hypothesis.split()
-            return round(sentence_bleu([ref_tokens], hyp_tokens,
-                                       smoothing_function=SmoothingFunction().method1), 4)
+    def translate(self, text: str, source_language: str, target_language: str) -> str:
+        result = self.client.translate(text, src=source_language, dest=target_language)
+        return result.text
 
 
-# ─────────────────────────────────────────────
-# STAGE 06: Reply Generation
-# ─────────────────────────────────────────────
+class OllamaResponder:
+    def __init__(self, model: str = "llama3", url: str = "http://localhost:11434/api/generate"):
+        self.model = model
+        self.url = url
+
+    def reply(self, english_text: str, intent: str, history_text: str, catalog_text: str) -> str:
+        prompt = (
+            "You are a travel assistant.\n"
+            "Write only in simple English.\n"
+            "Give a helpful short answer.\n\n"
+            f"Conversation history:\n{history_text}\n\n"
+            f"Available travel data:\n{catalog_text}\n\n"
+            f"User message in English: {english_text}\n"
+            f"Predicted intent: {intent}\n"
+            "Reply:"
+        )
+        payload = json.dumps({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+        }).encode("utf-8")
+        request = urllib.request.Request(self.url, data=payload, headers={"Content-Type": "application/json"})
+        response = urllib.request.urlopen(request)
+        data = json.loads(response.read().decode("utf-8"))
+        return data["response"].strip()
+
 
 class ReplyGenerator:
-    """Create a short English reply from the predicted intent."""
-
-    TEMPLATES = {
-        "flight": "I can help with flight bookings. Please share the origin, destination, and travel date.",
-        "airfare": "I can help with fare information. Which route would you like to check?",
-        "quantity": "I can help with quantity details. What exactly do you want to know?",
-        "ground_service": "I can help with ground service details. Which airport or city are you asking about?",
-        "capacity": "I can help with aircraft capacity. Which flight or aircraft should I check?",
-        "aircraft": "I can help with aircraft information. Tell me the airline or flight number.",
-        "airline": "I can help with airline details. Which airline are you asking about?",
-        "airport": "I can help with airport information. Which city or airport do you want?",
-        "meal": "I can help with meal information. Tell me the airline or flight route.",
-        "flight_time": "I can help with flight times. Please share the route and travel date.",
-        "distance": "I can help with distance information. Which two cities do you want to compare?",
-        "restriction": "I can help with travel restrictions. Please share the route or airline.",
-        "cheapest": "I can help find cheaper options. Which route are you comparing?",
-        "city": "I can help with city-related travel details. Which city do you mean?",
-        "abbreviation": "I can help explain abbreviations. Which one do you want me to decode?",
-        "flight_no": "I can help with flight numbers. Please share the airline or route.",
-        "ground_fare": "I can help with ground fare details. Which city or airport are you asking about?",
-        "airline+flight_no": "I can help with airline and flight number details. Please share the route or airline.",
-        "aircraft+flight+flight_no": "I can help with aircraft, flight, and flight number details. Please share the route.",
-        "airfare+flight_time": "I can help with fare and flight time details. Which route should I check?",
-        "flight+airfare": "I can help with flight and fare details. Please share the route and travel date.",
-        "ground_service+ground_fare": "I can help with ground service and fare details. Which city or airport are you asking about?",
-    }
-
-    def __init__(self, templates_path: str = None):
-        self.templates = dict(self.TEMPLATES)
-        if templates_path:
-            loaded = self._load_templates(templates_path)
-            if loaded:
-                self.templates = loaded
-
-    def _load_templates(self, templates_path: str) -> dict:
-        path = Path(templates_path)
-        if not path.exists():
-            return {}
-
-        suffix = path.suffix.lower()
-        try:
-            if suffix == ".json":
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    return {str(k): str(v) for k, v in data.items() if str(k).strip() and str(v).strip()}
-
-            if suffix == ".csv":
-                templates = {}
-                with open(path, "r", encoding="utf-8", newline="") as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        intent = (row.get("intent") or "").strip()
-                        reply = (row.get("reply") or "").strip()
-                        if intent and reply:
-                            templates[intent] = reply
-                return templates
-        except Exception:
-            return {}
-
-        return {}
+    def __init__(self, templates_path: str = "replies.json"):
+        with open(Path(templates_path), "r", encoding="utf-8") as file:
+            self.templates = json.load(file)
 
     def build(self, intent: str) -> str:
-        return self.templates.get(
-            intent,
-            f"I understood this as a {intent.replace('_', ' ')} request. Can you share a bit more detail?",
-        )
+        if intent in self.templates:
+            return self.templates[intent]
+        if intent == "hotel":
+            return "I can help with hotel booking. Please share the city, dates, and budget."
+        return "I can help with that. Please share a few more details."
 
 
-# ─────────────────────────────────────────────
-# Full end-to-end pipeline
-# ─────────────────────────────────────────────
+class TravelCatalog:
+    def __init__(self, catalog_path: str = "travel_catalog.csv"):
+        self.rows = []
+        with open(Path(catalog_path), "r", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                self.rows.append(row)
+
+    def find_rows(self, text: str, intent: str) -> list[dict]:
+        lower_text = text.lower()
+        if "hotel" in lower_text:
+            wanted_type = "hotel"
+        elif "flight" in lower_text or "book" in lower_text or "plane" in lower_text:
+            wanted_type = "flight"
+        else:
+            wanted_type = intent
+
+        query = (text + " " + intent).lower().split()
+        matches = []
+        for row in self.rows:
+            row_type = (row.get("type", "") or "").lower()
+            if wanted_type and row_type != wanted_type:
+                continue
+
+            row_text = " ".join([
+                row.get("type", "") or "",
+                row.get("name", "") or "",
+                row.get("from_city", "") or "",
+                row.get("to_city", "") or "",
+                row.get("city", "") or "",
+                row.get("notes", "") or "",
+            ]).lower()
+            if wanted_type in row_text:
+                matches.append(row)
+                continue
+
+            for word in query:
+                if word and word in row_text:
+                    matches.append(row)
+                    break
+        return matches[:10]
+
+    def to_text(self, rows: list[dict]) -> str:
+        lines = []
+        for row in rows:
+            lines.append(
+                f"{row.get('type', '') or ''} | {row.get('name', '') or ''} | from {row.get('from_city', '') or ''} | to {row.get('to_city', '') or ''} | city {row.get('city', '') or ''} | date {row.get('date', '') or ''} | time {row.get('time', '') or ''} | price {row.get('price', '') or ''} | available {row.get('availability', '') or ''}"
+            )
+        return "\n".join(lines)
+
+    def detect_city(self, text: str) -> str | None:
+        lower_text = text.lower()
+        for row in self.rows:
+            city = (row.get("city", "") or "").strip()
+            if city and city.lower() in lower_text:
+                return city
+        return None
+
 
 class MultilingualChatbotPipeline:
-    """
-    Chains all five stages. Swap any stage by passing a different config.
-    """
-
-    def __init__(self,
-                 detector:   LanguageDetector  = None,
-                 preprocessor: TextPreprocessor = None,
-                 extractor:  FeatureExtractor  = None,
-                 classifier: IntentClassifier  = None,
-                 translator: Translator        = None,
-                 reply_templates_path: str     = None):
-
-        self.detector     = detector     or LanguageDetector(backend="langdetect")
-        self.preprocessor = preprocessor or TextPreprocessor()
-        self.extractor    = extractor    or FeatureExtractor(method="tfidf")
-        self.classifier   = classifier   # optional — set after fit()
-        self.translator   = translator   # optional — heavy, load on demand
+    def __init__(self, extractor=None, classifier=None, reply_templates_path: str = "replies.json", catalog_path: str = "travel_catalog.csv", use_ollama: bool = False, ollama_model: str = "llama3"):
+        self.detector = LanguageDetector()
+        self.preprocessor = TextPreprocessor()
+        self.extractor = extractor if extractor is not None else FeatureExtractor()
+        self.classifier = classifier if classifier is not None else IntentClassifier()
+        self.translator = Translator()
         self.reply_generator = ReplyGenerator(reply_templates_path)
+        self.catalog = TravelCatalog(catalog_path)
+        self.use_ollama = use_ollama
+        self.ollama = OllamaResponder(ollama_model)
 
-    def _build_reply(self, intent: str, src_lang: str, tgt_lang: str | None) -> dict:
-        reply_english = self.reply_generator.build(intent)
-        reply_text = reply_english
-        reply_translation = None
+    @staticmethod
+    def clean_llm_reply(reply_english: str, intent: str) -> str:
+        lower_reply = reply_english.lower()
+        has_placeholder = (
+            "[" in reply_english and "]" in reply_english
+        ) or ("insert" in lower_reply)
 
-        if self.translator and tgt_lang and tgt_lang != "en":
-            reply_translation = self.translator.translate(reply_english, "en", tgt_lang)
-            reply_text = reply_translation["translation"]
+        if not has_placeholder:
+            return reply_english
 
-        return {
-            "reply_english": reply_english,
-            "reply": reply_text,
-            "reply_translation": reply_translation,
-            "reply_language": tgt_lang or src_lang,
-        }
+        if intent == "hotel":
+            return "Please share your check-in and check-out dates so I can complete the hotel booking."
+        if intent == "flight":
+            return "Please share your travel date so I can complete the flight booking."
+        return "Please share the missing details so I can complete your request."
 
-    def run(self, text: str, tgt_lang: str = None) -> dict:
+    @staticmethod
+    def detect_topic(text: str) -> str | None:
+        lower_text = text.lower()
+        hotel_words = ["hotel", "room", "stay", "हॉटेल", "रूम", "राहायचे"]
+        flight_words = ["flight", "plane", "air", "उड्डाण", "फ्लाइट", "तिकीट"]
+
+        for word in hotel_words:
+            if word in lower_text:
+                return "hotel"
+        for word in flight_words:
+            if word in lower_text:
+                return "flight"
+        return None
+
+    def resolve_topic(self, text: str, english_text: str, history_text: str) -> str | None:
+        current_topic = self.detect_topic(text)
+        if current_topic:
+            return current_topic
+
+        current_topic_en = self.detect_topic(english_text)
+        if current_topic_en:
+            return current_topic_en
+
+        history_topic = self.detect_topic(history_text)
+        if history_topic:
+            return history_topic
+
+        return None
+
+    @staticmethod
+    def build_history_text(conversation_history: list | None, max_turns: int = 6) -> str:
+        if not conversation_history:
+            return ""
+
+        lines = []
+        for message in conversation_history[-max_turns:]:
+            role = message.get("role", "")
+            content = message.get("content", "")
+            if content:
+                lines.append(f"{role.title()}: {content}")
+        return "\n".join(lines)
+
+    def fit(self, texts: list[str], intents: list[str]):
+        self.extractor.fit(texts)
+        vectors, _ = self.extractor.transform(texts)
+        self.classifier.fit(vectors, intents)
+
+    def run(self, text: str, conversation_history: list | None = None, previous_topic: str | None = None, previous_city: str | None = None) -> dict:
         result = {}
+        history_text = self.build_history_text(conversation_history)
+        result["conversation_history_text"] = history_text
 
-        # Stage 1: Detect input language
-        result["detection"] = self.detector.detect(text)
-        src_lang = result["detection"]["lang"]
-        reply_target_lang = tgt_lang or src_lang
+        detection = self.detector.detect(text)
+        result["detection"] = detection
+        source_language = detection["lang"]
 
-        # Stage 2: Translate to English if input is not English (needed for ML pipeline)
-        pipeline_text = text  # text to use for feature extraction
-        if src_lang != "en" and src_lang != "unknown":
-            if self.translator:
-                trans_result = self.translator.translate(text, src_lang, "en")
-                pipeline_text = trans_result["translation"]
-                result["input_translation"] = trans_result
-        
-        # Stage 3: Preprocess (now on English text)
-        result["preprocessing"] = self.preprocessor.process(pipeline_text)
-        clean_text = " ".join(result["preprocessing"]["tokens"])
+        if source_language == "en":
+            english_text = text
+        else:
+            english_text = self.translator.translate(text, source_language, "en")
+            result["input_translation"] = english_text
 
-        # Stage 4: Feature extraction (inference only — assumes extractor already fitted)
-        if self.extractor._vectorizer or self.extractor._st_model or self.extractor._ft_model:
-            vecs, lat = self.extractor.transform([clean_text])
-            result["features"] = {"shape": list(vecs.shape) if hasattr(vecs, "shape") else "sparse",
-                                   "latency_ms": lat}
+        preprocessing = self.preprocessor.process(english_text)
+        result["preprocessing"] = preprocessing
 
-        # Stage 5: Classification (on English features)
-        if self.classifier:
-            vecs, _ = self.extractor.transform([clean_text])
-            result["intent"] = self.classifier.predict(vecs)[0]
-            result.update(self._build_reply(result["intent"], src_lang, reply_target_lang))
+        topic = self.resolve_topic(text, english_text, history_text)
+        if not topic and previous_topic:
+            topic = previous_topic
+        result["topic"] = topic
 
-        # Stage 6: keep translation metadata for the UI
-        if self.translator and reply_target_lang:
-            result["translation"] = self.translator.translate(text, src_lang, reply_target_lang)
+        preferred_city = self.catalog.detect_city(english_text)
+        if not preferred_city:
+            preferred_city = self.catalog.detect_city(history_text)
+        if not preferred_city and previous_city:
+            preferred_city = previous_city
+        result["preferred_city"] = preferred_city
+
+        if topic == "hotel":
+            intent = "hotel"
+        else:
+            vectors, _ = self.extractor.transform([" ".join(preprocessing["tokens"] )])
+            intent = self.classifier.predict(vectors)
+
+        result["intent"] = intent
+
+        if topic == "hotel":
+            catalog_rows = self.catalog.find_rows("hotel " + text, "hotel")
+        elif topic == "flight":
+            catalog_rows = self.catalog.find_rows("flight " + text, "flight")
+        else:
+            catalog_rows = self.catalog.find_rows(text, intent)
+
+        if preferred_city:
+            city_filtered = [row for row in catalog_rows if (row.get("city", "") or "").lower() == preferred_city.lower()]
+            if city_filtered:
+                catalog_rows = city_filtered
+
+        catalog_text = self.catalog.to_text(catalog_rows)
+        result["catalog_text"] = catalog_text
+
+        if self.use_ollama:
+            reply_english = self.ollama.reply(english_text, intent, history_text, catalog_text)
+            reply_english = self.clean_llm_reply(reply_english, intent)
+            reply_detect = self.detector.detect(reply_english)
+            if reply_detect["lang"] != "en":
+                reply_english = self.translator.translate(reply_english, reply_detect["lang"], "en")
+            result["reply_english"] = reply_english
+            if source_language == "en":
+                result["reply"] = reply_english
+            else:
+                result["reply"] = self.translator.translate(reply_english, "en", source_language)
+        else:
+            reply_english = self.reply_generator.build(intent)
+            result["reply_english"] = reply_english
+
+            if source_language == "en":
+                result["reply"] = reply_english
+            else:
+                result["reply"] = self.translator.translate(reply_english, "en", source_language)
 
         return result
 
 
 if __name__ == "__main__":
-    print("pipeline.py defines reusable pipeline classes.")
-    print("To run the interactive app, use:")
-    print("  streamlit run streamlit_app.py")
+    print("This file contains the simple chatbot pipeline.")
