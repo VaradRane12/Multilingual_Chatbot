@@ -43,16 +43,10 @@ def load_intent_dataset(config: dict) -> dict:
         train_ds = load_dataset(dataset_id, split=train_split)
         train_clean = _clean_pairs(train_ds[text_col], train_ds[intent_col])
 
-        test_texts = []
-        test_intents = []
-        try:
-            test_ds = load_dataset(dataset_id, split=test_split)
-            test_clean = _clean_pairs(test_ds[text_col], test_ds[intent_col])
-            test_texts = test_clean["texts"]
-            test_intents = test_clean["intents"]
-        except Exception:
-            test_texts = []
-            test_intents = []
+        test_ds = load_dataset(dataset_id, split=test_split)
+        test_clean = _clean_pairs(test_ds[text_col], test_ds[intent_col])
+        test_texts = test_clean["texts"]
+        test_intents = test_clean["intents"]
 
         return {
             "train_texts": train_clean["texts"],
