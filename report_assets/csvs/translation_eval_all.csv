@@ -1,0 +1,48 @@
+source_text,source_lang,target_lang,reference_translation
+I need a flight from Mumbai to Delhi,en,hi,"मुझे मुंबई से दिल्ली की एक उड़ान चाहिए"
+Book a hotel in Pune,en,hi,"पुणे में एक होटल बुक करें"
+What is the cheapest fare to Goa?,en,hi,"गोवा के लिए सबसे सस्ता किराया क्या है?"
+Cancel my booking please,en,hi,"कृपया मेरी बुकिंग रद्द करें"
+I want two tickets to Chennai,en,hi,"मुझे चेन्नई के लिए दो टिकट चाहिए"
+
+I need a flight from Mumbai to Delhi,en,mr,"मला मुंबईहून दिल्लीला एक उड्डाण हवे आहे"
+Book a hotel in Pune,en,mr,"पुण्यात एक हॉटेल बुक करा"
+What is the cheapest fare to Goa?,en,mr,"गोव्यासाठी सर्वात स्वस्त भाडे किती आहे?"
+Cancel my booking please,en,mr,"कृपया माझी बुकिंग रद्द करा"
+I want two tickets to Chennai,en,mr,"मला चेन्नईसाठी दोन तिकिटे हवी आहेत"
+
+I need a flight from Mumbai to Delhi,en,sa,"मम मुंबईतः दिल्लीं प्रति विमानयानं आवश्यकः"
+Book a hotel in Pune,en,sa,"पुणे नगरे एकं होटलं आरक्षयतु"
+What is the cheapest fare to Goa?,en,sa,"गोआं प्रति सर्वं न्यूनतमं भाड़ं किम् अस्ति?"
+Cancel my booking please,en,sa,"मम आरक्षणं रद्दयतु"
+I want two tickets to Chennai,en,sa,"अहं चेन्नै नगराय द्वे टिकटे इच्छामि"
+
+I need a flight from Mumbai to Delhi,en,fr,"J'ai besoin d'un vol de Mumbai à Delhi"
+Book a hotel in Pune,en,fr,"Réservez un hôtel à Pune"
+What is the cheapest fare to Goa?,en,fr,"Quel est le tarif le moins cher pour Goa ?"
+Cancel my booking please,en,fr,"Veuillez annuler ma réservation"
+I want two tickets to Chennai,en,fr,"Je veux deux billets pour Chennai"
+
+I need a flight from Mumbai to Delhi,en,es,"Necesito un vuelo de Mumbai a Delhi"
+Book a hotel in Pune,en,es,"Reserve un hotel en Pune"
+What is the cheapest fare to Goa?,en,es,"¿Cuál es la tarifa más barata a Goa?"
+Cancel my booking please,en,es,"Por favor cancela mi reserva"
+I want two tickets to Chennai,en,es,"Quiero dos billetes para Chennai"
+
+I need a flight from Mumbai to Delhi,en,de,"Ich brauche einen Flug von Mumbai nach Delhi"
+Book a hotel in Pune,en,de,"Buchen Sie ein Hotel in Pune"
+What is the cheapest fare to Goa?,en,de,"Wie hoch ist der günstigste Fahrpreis nach Goa?"
+Cancel my booking please,en,de,"Bitte stornieren Sie meine Buchung"
+I want two tickets to Chennai,en,de,"Ich möchte zwei Tickets nach Chennai"
+
+I need a flight from Mumbai to Delhi,en,it,"Ho bisogno di un volo da Mumbai a Delhi"
+Book a hotel in Pune,en,it,"Prenota un hotel a Pune"
+What is the cheapest fare to Goa?,en,it,"Qual è la tariffa più economica per Goa?"
+Cancel my booking please,en,it,"Per favore annulla la mia prenotazione"
+I want two tickets to Chennai,en,it,"Voglio due biglietti per Chennai"
+
+I need a flight from Mumbai to Delhi,en,pt,"Preciso de um voo de Mumbai para Delhi"
+Book a hotel in Pune,en,pt,"Reserve um hotel em Pune"
+What is the cheapest fare to Goa?,en,pt,"Qual é a tarifa mais barata para Goa?"
+Cancel my booking please,en,pt,"Cancele minha reserva, por favor"
+I want two tickets to Chennai,en,pt,"Quero dois bilhetes para Chennai"

@@ -251,6 +251,7 @@ class Translator:
     MODEL_IDS = {
         "nllb-600M": "facebook/nllb-200-distilled-600M",
         "nllb-1.3B": "facebook/nllb-200-1.3B",
+        "nllb-3.3B": "facebook/nllb-200-3.3B",
         "mbart50": "facebook/mbart-large-50-many-to-many-mmt",
     }
 

@@ -19,3 +19,6 @@ googletrans==4.0.0rc1
 
 # App
 streamlit>=1.33.0
+
+# Graphs
+matplotlib>=3.8.0
