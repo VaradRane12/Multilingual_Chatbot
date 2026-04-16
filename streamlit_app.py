@@ -1,4 +1,4 @@
-"""Streamlit interface for the multilingual chatbot pipeline.
+"""Simple Streamlit app for intent prediction and multilingual replies.
 
 Run with:
     streamlit run streamlit_app.py
@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import joblib
@@ -14,118 +15,115 @@ import pandas as pd
 import streamlit as st
 
 from dataset_utils import load_config
-from pipeline import LanguageDetector, MultilingualChatbotPipeline, TextPreprocessor
+from pipeline import LanguageDetector, MultilingualChatbotPipeline, TextPreprocessor, Translator
 
 
 @st.cache_data(show_spinner=False)
-def get_config() -> dict:
+def load_app_config() -> dict:
+    # Read config once and reuse it across Streamlit reruns.
     return load_config("config.json")
 
 
 @st.cache_data(show_spinner=False)
-def get_metadata() -> dict:
-    config = get_config()
-    metadata_path = Path(config["runtime"].get("artifacts_dir", "artifacts")) / "metadata.json"
-    if not metadata_path.exists():
+def load_model_metadata() -> dict:
+    # Metadata is written by training and includes model scores.
+    config = load_app_config()
+    metadata_file = Path(config["runtime"].get("artifacts_dir", "artifacts")) / "metadata.json"
+    if not metadata_file.exists():
         return {}
-    with open(metadata_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    with open(metadata_file, "r", encoding="utf-8") as file:
+        return json.load(file)
 
 
-def humanize_intent(intent: str) -> str:
-    clean = intent.replace("atis_", "").replace("_", " ").strip()
-    return clean or intent
+def clean_intent_name(intent: str) -> str:
+    return intent.replace("atis_", "").replace("_", " ").strip() or intent
 
 
-@st.cache_resource(show_spinner=False)
-def get_translator():
-    from pipeline import Translator
+def build_reply(intent: str, target_lang: str, translator: Translator | None) -> str:
+    # Keep base reply simple, then translate if needed.
+    english_reply = (
+        f"I think this is a {clean_intent_name(intent)} request. "
+        "Please share a few more trip details."
+    )
 
-    return Translator(model="nllb-600M")
-
-
-def translate_text(text: str, target_lang: str | None) -> str:
-    if not target_lang or target_lang in {"en", "unknown"}:
-        return text
-
-    translator = get_translator()
-    if translator is None:
-        return text
+    if translator is None or not target_lang or target_lang in {"en", "unknown"}:
+        return english_reply
 
     try:
-        result = translator.translate(text, "en", target_lang)
-        return result.get("translation", text)
+        translated = translator.translate(english_reply, "en", target_lang)
+        return translated.get("translation", english_reply)
     except Exception:
-        return text
+        return english_reply
 
 
-def generate_response_variants(result: dict) -> dict:
-    intent = result.get("intent", "unknown")
-    lang = result.get("detection", {}).get("lang", "unknown")
-    confidence = result.get("detection", {}).get("confidence")
-    tokens = result.get("preprocessing", {}).get("token_count", 0)
-    readable_intent = humanize_intent(intent)
+def compute_bleu_score(candidate_text: str, reference_text: str) -> float:
+    # Use sacrebleu when available, otherwise use NLTK BLEU as fallback.
+    try:
+        import importlib
 
-    intent_driven = (
-        f"I detected a {readable_intent} request. "
-        f"Please provide the missing trip details so I can help."
-    )
-    contextual = (
-        f"Detected intent: {readable_intent}. Language: {lang}. "
-        f"Confidence: {confidence if confidence is not None else 'n/a'}. Tokens: {tokens}."
-    )
-    fallback = (
-        f"I understood your message as a {readable_intent} request. "
-        f"Tell me a bit more and I will continue."
-    )
+        sacrebleu_metrics = importlib.import_module("sacrebleu.metrics")
+        metric = sacrebleu_metrics.BLEU(effective_order=True)
+        return round(float(metric.sentence_score(candidate_text, [reference_text]).score), 2)
+    except Exception:
+        # Small built-in BLEU-4 fallback with add-one smoothing.
+        reference_tokens = reference_text.split()
+        candidate_tokens = candidate_text.split()
+        if not reference_tokens or not candidate_tokens:
+            return 0.0
 
-    return {
-        "intent_driven": translate_text(intent_driven, lang),
-        "contextual": translate_text(contextual, lang),
-        "fallback": translate_text(fallback, lang),
-        "source_language": lang,
-    }
+        def ngram_counts(tokens: list[str], n: int) -> dict[tuple[str, ...], int]:
+            counts: dict[tuple[str, ...], int] = {}
+            for i in range(len(tokens) - n + 1):
+                key = tuple(tokens[i : i + n])
+                counts[key] = counts.get(key, 0) + 1
+            return counts
 
+        precisions: list[float] = []
+        for n in (1, 2, 3, 4):
+            candidate_ngrams = ngram_counts(candidate_tokens, n)
+            reference_ngrams = ngram_counts(reference_tokens, n)
+            overlap = 0
+            total = 0
+            for ngram, count in candidate_ngrams.items():
+                overlap += min(count, reference_ngrams.get(ngram, 0))
+                total += count
+            precisions.append((overlap + 1.0) / (total + 1.0))
 
-def build_assistant_reply(result: dict, response_style: str) -> str:
-    variants = generate_response_variants(result)
-    source_language = variants.pop("source_language", "unknown")
-    reply = variants.get(response_style, variants["fallback"])
-    return reply, source_language
+        geometric_mean = math.exp(sum(math.log(p) for p in precisions) / 4.0)
+        candidate_len = len(candidate_tokens)
+        reference_len = len(reference_tokens)
+        brevity_penalty = 1.0 if candidate_len > reference_len else math.exp(1.0 - (reference_len / max(candidate_len, 1)))
+
+        return round(float(100.0 * brevity_penalty * geometric_mean), 2)
 
 
 @st.cache_resource(show_spinner=False)
-def get_cached_pipeline(classifier_name: str | None = None) -> MultilingualChatbotPipeline:
-    from pipeline import Translator
-    
-    config = get_config()
-    metadata = get_metadata()
-    runtime_cfg = config["runtime"]
-    model_cfg = config["model"]
+def load_pipeline(classifier_name: str | None = None) -> MultilingualChatbotPipeline:
+    # Load heavy model objects once (vectorizer, classifier, translator).
+    config = load_app_config()
+    metadata = load_model_metadata()
 
-    artifacts_dir = Path(runtime_cfg.get("artifacts_dir", "artifacts"))
-    extractor_path = artifacts_dir / "extractor.joblib"
+    model_config = config["model"]
+    artifacts_dir = Path(config["runtime"].get("artifacts_dir", "artifacts"))
+
+    extractor_file = artifacts_dir / "extractor.joblib"
     classifier_map = metadata.get("classifier_artifacts", {})
-    selected_classifier = classifier_name or metadata.get("best_classifier") or model_cfg.get("classifier", "svm")
-    classifier_path = Path(classifier_map.get(selected_classifier, artifacts_dir / "classifier.joblib"))
+    selected_classifier = classifier_name or metadata.get("best_classifier") or model_config.get("classifier", "svm")
+    classifier_file = Path(classifier_map.get(selected_classifier, artifacts_dir / "classifier.joblib"))
 
-    if not extractor_path.exists() or not classifier_path.exists():
-        raise FileNotFoundError(
-            "Model artifacts not found. Run: python train_intent_model.py"
-        )
+    if not extractor_file.exists() or not classifier_file.exists():
+        raise FileNotFoundError("Model artifacts not found. Run: python train_intent_model.py")
 
-    extractor = joblib.load(extractor_path)
-    classifier = joblib.load(classifier_path)
-    
-    # Use NLLB-200 distilled model for multilingual translation.
+    extractor = joblib.load(extractor_file)
+    classifier = joblib.load(classifier_file)
     translator = Translator(model="nllb-600M")
 
     return MultilingualChatbotPipeline(
-        detector=LanguageDetector(backend=model_cfg.get("detector_backend", "langdetect")),
+        detector=LanguageDetector(backend=model_config.get("detector_backend", "langdetect")),
         preprocessor=TextPreprocessor(
-            tokenizer=model_cfg.get("tokenizer", "whitespace"),
-            stopwords=model_cfg.get("stopwords", "nltk"),
-            normalize=model_cfg.get("normalize", "regex"),
+            tokenizer=model_config.get("tokenizer", "whitespace"),
+            stopwords=model_config.get("stopwords", "nltk"),
+            normalize=model_config.get("normalize", "regex"),
         ),
         extractor=extractor,
         classifier=classifier,
@@ -134,111 +132,158 @@ def get_cached_pipeline(classifier_name: str | None = None) -> MultilingualChatb
 
 
 def main() -> None:
-    st.set_page_config(page_title="Multilingual Pipeline Demo", page_icon="🧠", layout="wide")
-    st.title("Multilingual Chatbot Pipeline")
-    st.caption("Config-driven pipeline using dataset-trained model artifacts")
+    st.set_page_config(page_title="Simple Multilingual Chatbot", page_icon="💬", layout="wide")
+    st.title("Simple Multilingual Chatbot")
+    st.caption("Type in any language. The model predicts intent and replies in your language.")
 
-    config = get_config()
-    metadata = get_metadata()
-    runtime_cfg = config["runtime"]
-    model_cfg = config["model"]
-    comparison_rows = metadata.get("comparison", [])
+    config = load_app_config()
+    metadata = load_model_metadata()
+
     classifier_options = list(metadata.get("classifier_artifacts", {}).keys())
     if not classifier_options:
-        classifier_options = [metadata.get("best_classifier") or model_cfg.get("classifier", "svm")]
-
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-
-    if "response_style" not in st.session_state:
-        st.session_state.response_style = "intent_driven"
+        classifier_options = [metadata.get("best_classifier") or config["model"].get("classifier", "svm")]
 
     with st.sidebar:
-        st.header("Runtime")
+        # Sidebar shows quick runtime info and lets you switch classifier.
+        st.header("Settings")
         st.write(f"Dataset source: {config['dataset'].get('source')}")
-        st.write(f"Best classifier: {metadata.get('best_classifier', model_cfg.get('classifier'))}")
-        selected_classifier = st.selectbox("Compare classifier", options=classifier_options, index=0)
-        st.session_state.response_style = st.selectbox(
-            "Reply style",
-            options=["intent_driven", "contextual", "fallback"],
-            format_func=lambda value: {
-                "intent_driven": "Intent-driven",
-                "contextual": "Contextual",
-                "fallback": "Fallback",
-            }[value],
-            index=["intent_driven", "contextual", "fallback"].index(st.session_state.response_style),
-        )
-        st.write(f"Artifacts dir: {runtime_cfg.get('artifacts_dir')}")
-        st.info("If artifacts are missing, run: python train_intent_model.py")
+        st.write(f"Best classifier from training: {metadata.get('best_classifier', 'unknown')}")
+        selected_classifier = st.selectbox("Classifier", classifier_options, index=0)
+
+        comparison_rows = metadata.get("comparison", [])
+        if comparison_rows:
+            st.markdown("### Training Metrics")
+            st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True)
 
     try:
-        pipeline = get_cached_pipeline(selected_classifier)
-    except FileNotFoundError as e:
-        st.error(str(e))
+        pipeline = load_pipeline(selected_classifier)
+    except FileNotFoundError as error:
+        st.error(str(error))
         st.stop()
 
-    compare_tab, chat_tab = st.tabs(["Model Comparison", "Chatbot"])
+    # Read available intent labels from the loaded classifier.
+    intent_labels: list[str] = []
+    label_encoder = getattr(pipeline.classifier, "_label_encoder", None) or getattr(pipeline.classifier, "_label_enc", None)
+    if label_encoder is not None and hasattr(label_encoder, "classes_"):
+        intent_labels = [str(label) for label in label_encoder.classes_]
 
-    with compare_tab:
-        st.subheader("Intent model comparison")
-        if comparison_rows:
-            st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True)
-        else:
-            st.info("Run training first to populate comparison metrics.")
+    normal_tab, live_tab = st.tabs(["Normal Chatbot", "Live Accuracy Chatbot"])
 
-        st.subheader("Response generation comparison")
-        sample_text = st.text_input(
-            "Sample message for response comparison",
-            value="I want to book a flight from Boston to Denver",
-        )
+    with normal_tab:
+        st.subheader("Normal Chatbot")
+        st.caption("Standard chatbot mode without manual scoring.")
 
-        if st.button("Compare response styles", type="secondary"):
-            if not sample_text.strip():
-                st.warning("Please enter some text before comparing response styles.")
-            else:
-                with st.spinner("Running comparison..."):
-                    sample_result = pipeline.run(sample_text.strip())
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
 
-                sample_variants = generate_response_variants(sample_result)
-                st.caption(f"Replies translated to: {sample_variants.pop('source_language', 'unknown')}")
-                col3, col4 = st.columns(2)
-                with col3:
-                    st.markdown("**Intent-driven**")
-                    st.write(sample_variants["intent_driven"])
-                with col4:
-                    st.markdown("**Contextual**")
-                    st.write(sample_variants["contextual"])
-                st.markdown("**Fallback**")
-                st.write(sample_variants["fallback"])
-
-                with st.expander("Full JSON output"):
-                    st.json(sample_result)
-
-    with chat_tab:
-        st.subheader("Chat with the bot")
-        st.caption("Messages are stored in session state so you can continue the conversation.")
-
-        for message in st.session_state.chat_messages:
+        for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.write(message["content"])
 
-        user_text = st.chat_input("Type your message and press Enter")
+        user_text = st.chat_input("Type your message and press Enter", key="normal_chat_input")
         if user_text:
-            st.session_state.chat_messages.append({"role": "user", "content": user_text})
-            with st.spinner("Thinking..."):
-                chat_result = pipeline.run(user_text.strip())
-                assistant_reply, source_language = build_assistant_reply(
-                    chat_result,
-                    st.session_state.response_style,
-                )
-                assistant_reply = f"{assistant_reply}"
-                st.session_state.chat_messages.append({"role": "assistant", "content": assistant_reply})
+            st.session_state.messages.append({"role": "user", "content": user_text})
 
-            with st.expander("Last turn details"):
-                st.write(f"Detected language: {chat_result.get('detection', {}).get('lang', 'unknown')}")
-                st.write(f"Translated reply language: {source_language}")
-                st.write(f"Predicted intent: {chat_result.get('intent', 'n/a')}")
-                st.json(chat_result)
+            with st.spinner("Thinking..."):
+                # Run full NLP pipeline and build a user-facing reply.
+                result = pipeline.run(user_text.strip())
+                detected_language = result.get("detection", {}).get("lang", "unknown")
+                predicted_intent = result.get("intent", "unknown")
+                reply_text = build_reply(predicted_intent, detected_language, pipeline.translator)
+                st.session_state.messages.append({"role": "assistant", "content": reply_text})
+
+            with st.expander("Last message details"):
+                st.write(f"Detected language: {detected_language}")
+                st.write(f"Predicted intent: {predicted_intent}")
+                st.json(result)
+
+            st.rerun()
+
+    with live_tab:
+        st.subheader("Live Accuracy Chatbot")
+        st.caption("Pick true intent for accuracy, and optional reference reply for BLEU.")
+
+        if "live_messages" not in st.session_state:
+            st.session_state.live_messages = []
+        if "live_total" not in st.session_state:
+            st.session_state.live_total = 0
+        if "live_correct" not in st.session_state:
+            st.session_state.live_correct = 0
+        if "live_bleu_total" not in st.session_state:
+            st.session_state.live_bleu_total = 0
+        if "live_bleu_sum" not in st.session_state:
+            st.session_state.live_bleu_sum = 0.0
+
+        col1, col2, col3, col4 = st.columns(4)
+        accuracy = (st.session_state.live_correct / st.session_state.live_total * 100.0) if st.session_state.live_total else 0.0
+        avg_bleu = (st.session_state.live_bleu_sum / st.session_state.live_bleu_total) if st.session_state.live_bleu_total else 0.0
+        col1.metric("Samples Scored", st.session_state.live_total)
+        col2.metric("Correct", st.session_state.live_correct)
+        col3.metric("Live Accuracy", f"{accuracy:.2f}%")
+        col4.metric("Avg BLEU", f"{avg_bleu:.2f}")
+
+        if st.button("Reset Live Accuracy", key="reset_live_accuracy"):
+            st.session_state.live_total = 0
+            st.session_state.live_correct = 0
+            st.session_state.live_bleu_total = 0
+            st.session_state.live_bleu_sum = 0.0
+
+        if intent_labels:
+            true_intent = st.selectbox(
+                "True intent label for next message",
+                ["Skip scoring"] + intent_labels,
+                index=0,
+                key="live_true_intent",
+            )
+        else:
+            true_intent = "Skip scoring"
+            st.info("Intent labels are not available from this loaded classifier, so live scoring is disabled.")
+
+        reference_reply = st.text_input(
+            "Reference assistant reply for BLEU (optional)",
+            value="",
+            key="live_reference_reply",
+        )
+
+        for message in st.session_state.live_messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+
+        live_user_text = st.chat_input("Type your message and press Enter", key="live_chat_input")
+        if live_user_text:
+            st.session_state.live_messages.append({"role": "user", "content": live_user_text})
+
+            with st.spinner("Thinking..."):
+                live_result = pipeline.run(live_user_text.strip())
+                detected_language = live_result.get("detection", {}).get("lang", "unknown")
+                predicted_intent = live_result.get("intent", "unknown")
+                reply_text = build_reply(predicted_intent, detected_language, pipeline.translator)
+
+                score_note = ""
+                if true_intent != "Skip scoring":
+                    st.session_state.live_total += 1
+                    is_correct = predicted_intent == true_intent
+                    if is_correct:
+                        st.session_state.live_correct += 1
+                    score_note = f"\n\nScoring: predicted={predicted_intent}, true={true_intent}, correct={is_correct}"
+
+                bleu_note = ""
+                if reference_reply.strip():
+                    bleu_value = compute_bleu_score(reply_text, reference_reply.strip())
+                    st.session_state.live_bleu_total += 1
+                    st.session_state.live_bleu_sum += bleu_value
+                    bleu_note = f"\nBLEU={bleu_value}"
+
+                st.session_state.live_messages.append({"role": "assistant", "content": reply_text + score_note + bleu_note})
+
+            with st.expander("Last message details"):
+                st.write(f"Detected language: {detected_language}")
+                st.write(f"Predicted intent: {predicted_intent}")
+                if true_intent != "Skip scoring":
+                    st.write(f"True intent: {true_intent}")
+                if reference_reply.strip():
+                    st.write(f"Reference reply provided: {reference_reply}")
+                st.json(live_result)
 
             st.rerun()
 

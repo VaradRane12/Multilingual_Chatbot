@@ -1,0 +1,6 @@
+source_text,source_lang,target_lang,reference_translation,predicted_translation,bleu,latency_ms
+I need a flight from Mumbai to Delhi,en,hi,मुझे मुंबई से दिल्ली की एक उड़ान चाहिए,मुझे मुंबई से दिल्ली की उड़ान चाहिए,66.33,3396.71
+Book a hotel in Pune,en,hi,पुणे में एक होटल बुक करें,पुणे में होटल बुक करें,49.47,263.77
+What is the cheapest fare to Goa?,en,hi,गोवा के लिए सबसे सस्ता किराया क्या है?,गोवा जाने के लिए सबसे सस्ता किराया क्या है?,78.25,445.75
+Cancel my booking please,en,hi,कृपया मेरी बुकिंग रद्द करें,कृपया मेरी बुकिंग रद्द करें,100.00,249.70
+I want two tickets to Chennai,en,hi,मुझे चेन्नई के लिए दो टिकट चाहिए,मैं चेन्नई के लिए दो टिकट चाहता हूँ,58.74,356.53
