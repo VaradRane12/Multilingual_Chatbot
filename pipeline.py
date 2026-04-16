@@ -1,175 +1,125 @@
+"""Simple pipeline for multilingual intent classification.
+
+This file keeps the same public class names used by the app and training script,
+but the implementation is intentionally straightforward and easier to read.
 """
-Multilingual Chatbot Pipeline
-Stages: Language Detection → Preprocessing → Feature Representation
-        → Intent Classification → Machine Translation
-"""
+
+from __future__ import annotations
 
 import re
 import time
-import warnings
-warnings.filterwarnings("ignore")
+from typing import Any
 
-# ─────────────────────────────────────────────
-# STAGE 01: Language Identification
-# ─────────────────────────────────────────────
 
 class LanguageDetector:
-    """
-    Wraps multiple language detection backends so you can swap and compare.
-    Supported: 'fasttext', 'langdetect', 'langid'
-    """
+    """Detect language code from user text."""
 
-    def __init__(self, backend: str = "fasttext", model_path: str = None):
+    def __init__(self, backend: str = "langdetect", model_path: str | None = None):
         self.backend = backend
-        self._load(model_path)
+        self.model_path = model_path
+        self._detect_fn = None
+        self._fasttext_model = None
+        self._setup_backend()
 
-    def _load(self, model_path):
-        if self.backend == "fasttext":
-            try:
-                import fasttext
-                path = model_path or "lid.176.ftz"   # download from fastText releases
-                self.model = fasttext.load_model(path)
-            except Exception as e:
-                print(f"[LanguageDetector] fasttext load failed ({e}). Falling back to langdetect.")
-                self.backend = "langdetect"
-                self._load(None)
+    def _setup_backend(self) -> None:
+        if self.backend == "langdetect":
+            from langdetect import DetectorFactory, detect
 
-        elif self.backend == "langdetect":
-            from langdetect import detect, DetectorFactory
-            DetectorFactory.seed = 42          # reproducibility
+            DetectorFactory.seed = 42
             self._detect_fn = detect
+            return
 
-        elif self.backend == "langid":
+        if self.backend == "langid":
             import langid
-            self._detect_fn = lambda text: langid.classify(text)[0]
 
-        else:
-            raise ValueError(f"Unknown backend: {self.backend}")
+            self._detect_fn = lambda text: langid.classify(text)[0]
+            return
+
+        if self.backend == "fasttext":
+            import fasttext
+
+            model_file = self.model_path or "lid.176.ftz"
+            self._fasttext_model = fasttext.load_model(model_file)
+            return
+
+        raise ValueError(f"Unknown language detector backend: {self.backend}")
 
     def detect(self, text: str) -> dict:
-        start = time.perf_counter()
+        start_time = time.perf_counter()
         try:
             if self.backend == "fasttext":
-                labels, probs = self.model.predict(text.replace("\n", " "), k=1)
-                lang = labels[0].replace("__label__", "")
+                labels, probs = self._fasttext_model.predict(text.replace("\n", " "), k=1)
+                language = labels[0].replace("__label__", "")
                 confidence = float(probs[0])
             else:
-                lang = self._detect_fn(text)
-                confidence = None          # langdetect/langid don't expose probability easily
+                language = self._detect_fn(text)
+                confidence = None
         except Exception:
-            lang, confidence = "unknown", 0.0
+            language = "unknown"
+            confidence = 0.0
 
-        latency_ms = (time.perf_counter() - start) * 1000
-        return {"lang": lang, "confidence": confidence, "latency_ms": round(latency_ms, 2)}
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return {"lang": language, "confidence": confidence, "latency_ms": round(latency_ms, 2)}
 
-
-# ─────────────────────────────────────────────
-# STAGE 02: Text Preprocessing
-# ─────────────────────────────────────────────
 
 class TextPreprocessor:
-    """
-    Configurable preprocessing:
-      tokenizer  : 'whitespace' | 'spacy' | 'sentencepiece'
-      stopwords  : 'nltk' | 'none' | 'custom'
-      normalize  : 'regex' | 'unicode' | 'full'
-    """
+    """Clean user text and split it into tokens for feature extraction."""
 
-    EMOJI_RE  = re.compile("["
-        u"\U0001F600-\U0001F64F"
-        u"\U0001F300-\U0001F5FF"
-        u"\U0001F680-\U0001F6FF"
-        u"\U0001F1E0-\U0001F1FF"
-        "]+", flags=re.UNICODE)
-    URL_RE    = re.compile(r"https?://\S+|www\.\S+")
-    MENTION_RE = re.compile(r"@\w+")
+    URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
+    PUNCT_PATTERN = re.compile(r"[^\w\s]")
 
-    def __init__(self,
-                 tokenizer: str = "whitespace",
-                 stopwords: str = "nltk",
-                 normalize: str = "regex",
-                 lang: str = "english",
-                 custom_stopwords: list = None):
+    def __init__(
+        self,
+        tokenizer: str = "whitespace",
+        stopwords: str = "nltk",
+        normalize: str = "regex",
+        lang: str = "english",
+        custom_stopwords: list[str] | None = None,
+    ):
+        self.tokenizer = tokenizer
+        self.stopwords_mode = stopwords
+        self.normalize_mode = normalize
+        self.language = lang
+        self.custom_stopwords = custom_stopwords or []
+        self.stopwords = self._load_stopwords()
 
-        self.tokenizer  = tokenizer
-        self.stopwords  = stopwords
-        self.normalize  = normalize
-        self.lang       = lang
-        self._stop_set  = self._build_stopset(custom_stopwords)
-        self._nlp       = None
-        self._sp_model  = None
-
-        if tokenizer == "spacy":
-            self._load_spacy()
-        elif tokenizer == "sentencepiece":
-            self._load_sp()
-
-    def _build_stopset(self, custom):
-        if self.stopwords == "none":
+    def _load_stopwords(self) -> set[str]:
+        if self.stopwords_mode == "none":
             return set()
-        if self.stopwords == "custom" and custom:
-            return set(custom)
+        if self.stopwords_mode == "custom":
+            return {word.lower() for word in self.custom_stopwords}
+
         try:
-            from nltk.corpus import stopwords as sw
             import nltk
+            from nltk.corpus import stopwords
+
             nltk.download("stopwords", quiet=True)
-            return set(sw.words(self.lang))
+            return set(stopwords.words(self.language))
         except Exception:
             return set()
 
-    def _load_spacy(self):
-        try:
-            import spacy
-            self._nlp = spacy.load("xx_ent_wiki_sm")   # multilingual
-        except Exception:
-            print("[Preprocessor] spaCy model not found; falling back to whitespace.")
-            self.tokenizer = "whitespace"
+    def _normalize_text(self, text: str) -> str:
+        cleaned = text
+        if self.normalize_mode in {"regex", "full"}:
+            cleaned = self.URL_PATTERN.sub(" ", cleaned)
+            cleaned = self.PUNCT_PATTERN.sub(" ", cleaned)
+        if self.normalize_mode == "full":
+            cleaned = cleaned.lower()
+        return " ".join(cleaned.split())
 
-    def _load_sp(self):
-        try:
-            import sentencepiece as spm
-            m = spm.SentencePieceProcessor()
-            m.Load("spm.model")                        # provide your own .model file
-            self._sp_model = m
-        except Exception:
-            print("[Preprocessor] SentencePiece model not found; falling back to whitespace.")
-            self.tokenizer = "whitespace"
-
-    # ── normalization ──────────────────────────
-
-    def _normalize(self, text: str) -> str:
-        if self.normalize in ("regex", "full"):
-            text = self.URL_RE.sub(" <URL> ", text)
-            text = self.EMOJI_RE.sub(" <EMOJI> ", text)
-            text = self.MENTION_RE.sub(" <MENTION> ", text)
-        if self.normalize in ("unicode", "full"):
-            import unicodedata
-            text = unicodedata.normalize("NFKC", text)
-        if self.normalize == "full":
-            text = text.lower()
-        return text.strip()
-
-    # ── tokenization ──────────────────────────
-
-    def _tokenize(self, text: str) -> list:
-        if self.tokenizer == "spacy" and self._nlp:
-            import nltk
-            nltk.download("wordnet", quiet=True)
-            doc = self._nlp(text)
-            return [t.lemma_ for t in doc if not t.is_space]
-        if self.tokenizer == "sentencepiece" and self._sp_model:
-            return self._sp_model.EncodeAsPieces(text)
-        # default: whitespace
+    def _tokenize(self, text: str) -> list[str]:
+        # We keep this simple on purpose.
+        if self.tokenizer not in {"whitespace", "spacy", "sentencepiece"}:
+            return text.split()
         return text.split()
 
-    # ── main entry ─────────────────────────────
-
     def process(self, text: str) -> dict:
-        start = time.perf_counter()
-        normalized = self._normalize(text)
+        start_time = time.perf_counter()
+        normalized = self._normalize_text(text)
         tokens = self._tokenize(normalized)
-        tokens = [t for t in tokens if t.lower() not in self._stop_set and len(t) > 1]
-        latency_ms = (time.perf_counter() - start) * 1000
+        tokens = [token for token in tokens if len(token) > 1 and token.lower() not in self.stopwords]
+        latency_ms = (time.perf_counter() - start_time) * 1000
+
         return {
             "original": text,
             "normalized": normalized,
@@ -179,154 +129,136 @@ class TextPreprocessor:
         }
 
 
-# ─────────────────────────────────────────────
-# STAGE 03: Feature Representation
-# ─────────────────────────────────────────────
-
 class FeatureExtractor:
-    """
-    method: 'tfidf' | 'fasttext_avg' | 'sentence_transformer'
-    For sentence_transformer, model_name controls which checkpoint to load.
-    """
+    """Convert cleaned text into numeric vectors for the classifier."""
 
-    def __init__(self, method: str = "tfidf",
-                 max_features: int = 20_000,
-                 model_name: str = "LaBSE"):
-        self.method       = method
+    def __init__(self, method: str = "tfidf", max_features: int = 20000, model_name: str = "LaBSE"):
+        self.method = method
         self.max_features = max_features
-        self.model_name   = model_name
-        self._vectorizer  = None
-        self._ft_model    = None
-        self._st_model    = None
+        self.model_name = model_name
+        self._vectorizer = None
+        self._ft_model = None
+        self._st_model = None
 
-    # ── fit (call once on training corpus) ────
+        if self.method not in {"tfidf", "fasttext_avg", "sentence_transformer"}:
+            raise ValueError(f"Unsupported feature method: {self.method}")
 
-    def fit(self, corpus: list):
+    def fit(self, corpus: list[str]) -> "FeatureExtractor":
         if self.method == "tfidf":
             from sklearn.feature_extraction.text import TfidfVectorizer
+
             self._vectorizer = TfidfVectorizer(
                 max_features=self.max_features,
-                sublinear_tf=True,
                 ngram_range=(1, 2),
-                analyzer="word",
+                sublinear_tf=True,
             )
             self._vectorizer.fit(corpus)
+            return self
 
-        elif self.method == "fasttext_avg":
+        if self.method == "fasttext_avg":
             import fasttext
-            # expects a pre-trained multilingual fasttext model
+
             self._ft_model = fasttext.load_model("cc.en.300.bin")
+            return self
 
-        elif self.method == "sentence_transformer":
-            from sentence_transformers import SentenceTransformer
-            self._st_model = SentenceTransformer(self.model_name)
+        from sentence_transformers import SentenceTransformer
 
+        self._st_model = SentenceTransformer(self.model_name)
         return self
 
-    # ── transform ─────────────────────────────
-
-    def transform(self, texts: list):
+    def transform(self, texts: list[str]) -> tuple[Any, float]:
         import numpy as np
-        start = time.perf_counter()
+
+        start_time = time.perf_counter()
 
         if self.method == "tfidf":
             if self._vectorizer is None:
-                raise RuntimeError("Call fit() before transform().")
-            vecs = self._vectorizer.transform(texts)
-
+                raise RuntimeError("Call fit() before transform()")
+            vectors = self._vectorizer.transform(texts)
         elif self.method == "fasttext_avg":
-            vecs = np.vstack([
-                np.mean([self._ft_model.get_word_vector(w)
-                         for w in t.split()] or [np.zeros(300)], axis=0)
-                for t in texts
+            vectors = np.vstack([
+                np.mean([self._ft_model.get_word_vector(word) for word in text.split()] or [np.zeros(300)], axis=0)
+                for text in texts
             ])
+        else:
+            vectors = self._st_model.encode(texts, show_progress_bar=False)
 
-        elif self.method == "sentence_transformer":
-            vecs = self._st_model.encode(texts, show_progress_bar=False)
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return vectors, round(latency_ms, 2)
 
-        latency_ms = (time.perf_counter() - start) * 1000
-        return vecs, round(latency_ms, 2)
-
-    def fit_transform(self, corpus: list):
+    def fit_transform(self, corpus: list[str]) -> tuple[Any, float]:
         self.fit(corpus)
         return self.transform(corpus)
 
 
-# ─────────────────────────────────────────────
-# STAGE 04: Intent Classification
-# ─────────────────────────────────────────────
-
 class IntentClassifier:
-    """
-    classifier: 'svm' | 'logreg' | 'naive_bayes' | 'random_forest' | 'mbert'
-    """
+    """Train and run one of the supported sklearn intent models."""
 
     CLASSIFIERS = {
-        "svm":          ("sklearn.svm",                   "LinearSVC",        {"C": 1.0, "max_iter": 2000}),
-        "logreg":       ("sklearn.linear_model",          "LogisticRegression", {"max_iter": 1000, "C": 5.0}),
-        "naive_bayes":  ("sklearn.naive_bayes",           "MultinomialNB",    {}),
-        "random_forest":("sklearn.ensemble",              "RandomForestClassifier", {"n_estimators": 200, "n_jobs": -1}),
+        "svm": ("sklearn.svm", "LinearSVC", {"C": 1.0, "max_iter": 2000}),
+        "logreg": ("sklearn.linear_model", "LogisticRegression", {"max_iter": 1000, "C": 5.0}),
+        "naive_bayes": ("sklearn.naive_bayes", "MultinomialNB", {}),
+        "random_forest": ("sklearn.ensemble", "RandomForestClassifier", {"n_estimators": 200, "n_jobs": -1}),
     }
 
     def __init__(self, classifier: str = "svm"):
-        self.classifier = classifier
-        self._model     = None
+        if classifier not in self.CLASSIFIERS:
+            raise ValueError(f"Unsupported classifier: {classifier}")
+        self.classifier_name = classifier
+        self._model = None
+        self._label_encoder = None
         self._label_enc = None
-        self._build()
+        self._build_model()
 
-    def _build(self):
-        if self.classifier == "mbert":
-            # Placeholder: wire in your fine-tuning loop here
-            # e.g. HuggingFace Trainer with bert-base-multilingual-cased
-            raise NotImplementedError(
-                "mBERT fine-tuning requires a HuggingFace Trainer setup. "
-                "See experiments.py run_intent_mbert() for a skeleton."
-            )
-        module_path, cls_name, kwargs = self.CLASSIFIERS[self.classifier]
+    def _build_model(self) -> None:
         import importlib
-        mod = importlib.import_module(module_path)
-        self._model = getattr(mod, cls_name)(**kwargs)
 
-    def fit(self, X, y):
+        module_name, class_name, kwargs = self.CLASSIFIERS[self.classifier_name]
+        module = importlib.import_module(module_name)
+        self._model = getattr(module, class_name)(**kwargs)
+
+    def fit(self, vectors: Any, labels: list[str]) -> "IntentClassifier":
         from sklearn.preprocessing import LabelEncoder
-        self._label_enc = LabelEncoder()
-        y_enc = self._label_enc.fit_transform(y)
-        self._model.fit(X, y_enc)
+
+        self._label_encoder = LabelEncoder()
+        encoded_labels = self._label_encoder.fit_transform(labels)
+        self._model.fit(vectors, encoded_labels)
+        # Keep old attribute name for joblib backward compatibility.
+        self._label_enc = self._label_encoder
         return self
 
-    def predict(self, X) -> list:
-        preds = self._model.predict(X)
-        return self._label_enc.inverse_transform(preds).tolist()
+    def predict(self, vectors: Any) -> list[str]:
+        label_encoder = getattr(self, "_label_encoder", None) or getattr(self, "_label_enc", None)
+        if label_encoder is None:
+            raise RuntimeError("Label encoder is missing. Train or reload the classifier.")
+        predicted_ids = self._model.predict(vectors)
+        return label_encoder.inverse_transform(predicted_ids).tolist()
 
-    def evaluate(self, X, y_true) -> dict:
-        from sklearn.metrics import accuracy_score, f1_score, classification_report
-        y_pred = self.predict(X)
+    def evaluate(self, vectors: Any, true_labels: list[str]) -> dict:
+        from sklearn.metrics import accuracy_score, classification_report, f1_score
+
+        predicted_labels = self.predict(vectors)
         return {
-            "accuracy":  round(accuracy_score(y_true, y_pred), 4),
-            "macro_f1":  round(f1_score(y_true, y_pred, average="macro"), 4),
-            "report":    classification_report(y_true, y_pred),
+            "accuracy": round(float(accuracy_score(true_labels, predicted_labels)), 4),
+            "macro_f1": round(float(f1_score(true_labels, predicted_labels, average="macro")), 4),
+            "report": classification_report(true_labels, predicted_labels),
         }
 
 
-# ─────────────────────────────────────────────
-# STAGE 05: Machine Translation
-# ─────────────────────────────────────────────
-
 class Translator:
-    """
-    model: 'nllb-600M' | 'nllb-1.3B' | 'mbart50' | 'opus-mt' | 'google'
-    """
+    """Translate text using NLLB, mBART, Opus-MT, or Google translator."""
 
     MODEL_IDS = {
         "nllb-600M": "facebook/nllb-200-distilled-600M",
         "nllb-1.3B": "facebook/nllb-200-1.3B",
-        "mbart50":   "facebook/mbart-large-50-many-to-many-mmt",
+        "mbart50": "facebook/mbart-large-50-many-to-many-mmt",
     }
 
-    NLLB_CODE_MAP = {
+    NLLB_LANGUAGE_MAP = {
         "en": "eng_Latn",
         "hi": "hin_Deva",
         "mr": "mar_Deva",
+        "sa": "san_Deva",
         "fr": "fra_Latn",
         "es": "spa_Latn",
         "de": "deu_Latn",
@@ -334,9 +266,10 @@ class Translator:
         "pt": "por_Latn",
     }
 
-    MBART_CODE_MAP = {
+    MBART_LANGUAGE_MAP = {
         "en": "en_XX",
         "hi": "hi_IN",
+        "sa": "hi_IN",
         "fr": "fr_XX",
         "es": "es_XX",
         "de": "de_DE",
@@ -345,198 +278,160 @@ class Translator:
     }
 
     def __init__(self, model: str = "nllb-600M", device: str = "cpu"):
-        self.model_key = model
-        self.device    = device
-        self._pipe     = None
-        self._hf_model = None
-        self._hf_tokenizer = None
-        self._load()
+        self.model_name = model
+        self.device = device
+        self._model = None
+        self._tokenizer = None
+        self._google_client = None
+        self._load_model()
 
-    def _load(self):
-        if self.model_key in self.MODEL_IDS:
+    def _load_model(self) -> None:
+        if self.model_name in self.MODEL_IDS:
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-            model_id = self.MODEL_IDS[self.model_key]
-            self._hf_tokenizer = AutoTokenizer.from_pretrained(model_id)
-            self._hf_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        elif self.model_key == "opus-mt":
-            # Loaded per language pair in translate()
-            pass
-        elif self.model_key == "google":
-            from googletrans import Translator as GTranslator
-            self._gtrans = GTranslator()
 
-    def _to_nllb_code(self, code: str) -> str:
+            hf_model_name = self.MODEL_IDS[self.model_name]
+            self._tokenizer = AutoTokenizer.from_pretrained(hf_model_name)
+            self._model = AutoModelForSeq2SeqLM.from_pretrained(hf_model_name)
+            return
+
+        if self.model_name == "google":
+            from googletrans import Translator as GoogleTranslator
+
+            self._google_client = GoogleTranslator()
+
+    def _normalize_nllb_code(self, code: str) -> str:
         if not code:
             return "eng_Latn"
         if "_" in code and len(code) >= 8:
             return code
-        return self.NLLB_CODE_MAP.get(code.lower(), "eng_Latn")
+        return self.NLLB_LANGUAGE_MAP.get(code.lower(), "eng_Latn")
 
-    def _to_mbart_code(self, code: str) -> str:
+    def _normalize_mbart_code(self, code: str) -> str:
         if not code:
             return "en_XX"
         if "_" in code and len(code) >= 4:
             return code
-        return self.MBART_CODE_MAP.get(code.lower(), "en_XX")
+        return self.MBART_LANGUAGE_MAP.get(code.lower(), "en_XX")
 
-    def _get_forced_bos_token_id(self, tgt_lang_code: str) -> int:
-        tokenizer = self._hf_tokenizer
-        if tokenizer is None:
-            raise RuntimeError("Tokenizer is not loaded")
+    def _target_language_token_id(self, target_language_code: str) -> int:
+        # Different tokenizer versions expose this differently.
+        if hasattr(self._tokenizer, "lang_code_to_id") and self._tokenizer.lang_code_to_id:
+            if target_language_code in self._tokenizer.lang_code_to_id:
+                return int(self._tokenizer.lang_code_to_id[target_language_code])
 
-        if hasattr(tokenizer, "lang_code_to_id") and getattr(tokenizer, "lang_code_to_id"):
-            mapping = getattr(tokenizer, "lang_code_to_id")
-            if tgt_lang_code in mapping:
-                return int(mapping[tgt_lang_code])
+        if hasattr(self._tokenizer, "get_lang_id"):
+            return int(self._tokenizer.get_lang_id(target_language_code))
 
-        if hasattr(tokenizer, "get_lang_id"):
-            return int(tokenizer.get_lang_id(tgt_lang_code))
-
-        token_id = tokenizer.convert_tokens_to_ids(tgt_lang_code)
+        token_id = self._tokenizer.convert_tokens_to_ids(target_language_code)
         if token_id is None:
-            raise ValueError(f"Unsupported target language code: {tgt_lang_code}")
+            raise ValueError(f"Unsupported target language code: {target_language_code}")
         return int(token_id)
 
+    def _hf_translate(self, text: str, source_code: str, target_code: str) -> str:
+        import torch
+
+        self._tokenizer.src_lang = source_code
+        encoded = self._tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+        bos_token_id = self._target_language_token_id(target_code)
+
+        with torch.no_grad():
+            generated = self._model.generate(
+                **encoded,
+                forced_bos_token_id=bos_token_id,
+                max_length=512,
+            )
+        return self._tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
+
     def translate(self, text: str, src_lang: str, tgt_lang: str) -> dict:
-        """
-        NLLB language codes: e.g. 'eng_Latn', 'hin_Deva', 'fra_Latn'
-        mBART codes: 'en_XX', 'hi_IN', 'fr_XX'
-        """
-        start = time.perf_counter()
+        start_time = time.perf_counter()
 
-        if self.model_key in ("nllb-600M", "nllb-1.3B"):
-            import torch
-            src = self._to_nllb_code(src_lang)
-            tgt = self._to_nllb_code(tgt_lang)
-            self._hf_tokenizer.src_lang = src
-            encoded = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            forced_bos_token_id = self._get_forced_bos_token_id(tgt)
-            with torch.no_grad():
-                generated = self._hf_model.generate(
-                    **encoded,
-                    forced_bos_token_id=forced_bos_token_id,
-                    max_length=512,
-                )
-            translation = self._hf_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
-
-        elif self.model_key == "mbart50":
-            import torch
-            src = self._to_mbart_code(src_lang)
-            tgt = self._to_mbart_code(tgt_lang)
-            self._hf_tokenizer.src_lang = src
-            encoded = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            forced_bos_token_id = self._get_forced_bos_token_id(tgt)
-            with torch.no_grad():
-                generated = self._hf_model.generate(
-                    **encoded,
-                    forced_bos_token_id=forced_bos_token_id,
-                    max_length=512,
-                )
-            translation = self._hf_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
-
-        elif self.model_key == "opus-mt":
+        if self.model_name in {"nllb-600M", "nllb-1.3B"}:
+            source = self._normalize_nllb_code(src_lang)
+            target = self._normalize_nllb_code(tgt_lang)
+            translated_text = self._hf_translate(text, source, target)
+        elif self.model_name == "mbart50":
+            source = self._normalize_mbart_code(src_lang)
+            target = self._normalize_mbart_code(tgt_lang)
+            translated_text = self._hf_translate(text, source, target)
+        elif self.model_name == "opus-mt":
             from transformers import MarianMTModel, MarianTokenizer
+
             pair = f"{src_lang[:2]}-{tgt_lang[:2]}"
             model_name = f"Helsinki-NLP/opus-mt-{pair}"
-            tok   = MarianTokenizer.from_pretrained(model_name)
+            tokenizer = MarianTokenizer.from_pretrained(model_name)
             model = MarianMTModel.from_pretrained(model_name)
-            ids   = tok([text], return_tensors="pt", padding=True)
-            translation = tok.decode(model.generate(**ids)[0],
-                                     skip_special_tokens=True)
-
-        elif self.model_key == "google":
-            result = self._gtrans.translate(text, src=src_lang, dest=tgt_lang)
-            translation = result.text
-
+            encoded = tokenizer([text], return_tensors="pt", padding=True)
+            translated_text = tokenizer.decode(model.generate(**encoded)[0], skip_special_tokens=True)
+        elif self.model_name == "google" and self._google_client is not None:
+            translated_text = self._google_client.translate(text, src=src_lang, dest=tgt_lang).text
         else:
-            translation = text   # passthrough for unknown
+            translated_text = text
 
-        latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms = (time.perf_counter() - start_time) * 1000
         return {
-            "source":      text,
-            "translation": translation,
-            "src_lang":    src_lang,
-            "tgt_lang":    tgt_lang,
-            "latency_ms":  round(latency_ms, 2),
+            "source": text,
+            "translation": translated_text,
+            "src_lang": src_lang,
+            "tgt_lang": tgt_lang,
+            "latency_ms": round(latency_ms, 2),
         }
 
-    @staticmethod
-    def bleu(hypothesis: str, reference: str) -> float:
-        """Quick sentence-level BLEU (sacrebleu)."""
-        try:
-            from sacrebleu.metrics import BLEU
-            metric = BLEU(effective_order=True)
-            return round(metric.sentence_score(hypothesis, [reference]).score, 2)
-        except ImportError:
-            from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-            import nltk
-            nltk.download("punkt", quiet=True)
-            ref_tokens  = reference.split()
-            hyp_tokens  = hypothesis.split()
-            return round(sentence_bleu([ref_tokens], hyp_tokens,
-                                       smoothing_function=SmoothingFunction().method1), 4)
-
-
-# ─────────────────────────────────────────────
-# Full end-to-end pipeline
-# ─────────────────────────────────────────────
 
 class MultilingualChatbotPipeline:
-    """
-    Chains all five stages. Swap any stage by passing a different config.
-    """
+    """Run language detection, preprocessing, vectorization, classification, and translation."""
 
-    def __init__(self,
-                 detector:   LanguageDetector  = None,
-                 preprocessor: TextPreprocessor = None,
-                 extractor:  FeatureExtractor  = None,
-                 classifier: IntentClassifier  = None,
-                 translator: Translator        = None):
-
-        self.detector     = detector     or LanguageDetector(backend="langdetect")
+    def __init__(
+        self,
+        detector: LanguageDetector | None = None,
+        preprocessor: TextPreprocessor | None = None,
+        extractor: FeatureExtractor | None = None,
+        classifier: IntentClassifier | None = None,
+        translator: Translator | None = None,
+    ):
+        self.detector = detector or LanguageDetector(backend="langdetect")
         self.preprocessor = preprocessor or TextPreprocessor()
-        self.extractor    = extractor    or FeatureExtractor(method="tfidf")
-        self.classifier   = classifier   # optional — set after fit()
-        self.translator   = translator   # optional — heavy, load on demand
+        self.extractor = extractor or FeatureExtractor(method="tfidf")
+        self.classifier = classifier
+        self.translator = translator
 
-    def run(self, text: str, tgt_lang: str = None) -> dict:
-        result = {}
+    def run(self, text: str, tgt_lang: str | None = None) -> dict:
+        result: dict[str, Any] = {}
 
-        # Stage 1: Detect input language
-        result["detection"] = self.detector.detect(text)
-        src_lang = result["detection"]["lang"]
+        # 1) Detect input language first.
+        detection = self.detector.detect(text)
+        result["detection"] = detection
+        source_language = detection["lang"]
 
-        # Stage 2: Translate to English if input is not English (needed for ML pipeline)
-        pipeline_text = text  # text to use for feature extraction
-        if src_lang != "en" and src_lang != "unknown":
-            if self.translator:
-                trans_result = self.translator.translate(text, src_lang, "en")
-                pipeline_text = trans_result["translation"]
-                result["input_translation"] = trans_result
-        
-        # Stage 3: Preprocess (now on English text)
-        result["preprocessing"] = self.preprocessor.process(pipeline_text)
-        clean_text = " ".join(result["preprocessing"]["tokens"])
+        # 2) Translate to English before classification when needed.
+        text_for_model = text
+        if source_language not in {"en", "unknown"} and self.translator is not None:
+            translation = self.translator.translate(text, source_language, "en")
+            text_for_model = translation["translation"]
+            result["input_translation"] = translation
 
-        # Stage 4: Feature extraction (inference only — assumes extractor already fitted)
-        if self.extractor._vectorizer or self.extractor._st_model or self.extractor._ft_model:
-            vecs, lat = self.extractor.transform([clean_text])
-            result["features"] = {"shape": list(vecs.shape) if hasattr(vecs, "shape") else "sparse",
-                                   "latency_ms": lat}
+        # 3) Clean text and tokenize.
+        preprocessing = self.preprocessor.process(text_for_model)
+        result["preprocessing"] = preprocessing
+        cleaned_text = " ".join(preprocessing["tokens"])
 
-        # Stage 5: Classification (on English features)
-        if self.classifier:
-            vecs, _ = self.extractor.transform([clean_text])
-            result["intent"] = self.classifier.predict(vecs)[0]
+        # 4) Convert text to vectors.
+        if self.extractor._vectorizer or self.extractor._ft_model or self.extractor._st_model:
+            vectors, feature_latency_ms = self.extractor.transform([cleaned_text])
+            shape = list(vectors.shape) if hasattr(vectors, "shape") else "unknown"
+            result["features"] = {"shape": shape, "latency_ms": feature_latency_ms}
+        else:
+            vectors = None
 
-        # Stage 6: Translate response back to user language
-        if self.translator and tgt_lang:
-            result["translation"] = self.translator.translate(text, src_lang, tgt_lang)
+        # 5) Predict intent.
+        if self.classifier is not None and vectors is not None:
+            result["intent"] = self.classifier.predict(vectors)[0]
+
+        # 6) Optional: translate original text to requested target language.
+        if self.translator is not None and tgt_lang:
+            result["translation"] = self.translator.translate(text, source_language, tgt_lang)
 
         return result
 
 
 if __name__ == "__main__":
-    print("pipeline.py defines reusable pipeline classes.")
-    print("To run the interactive app, use:")
-    print("  streamlit run streamlit_app.py")
+    print("Run the app with: streamlit run streamlit_app.py")
