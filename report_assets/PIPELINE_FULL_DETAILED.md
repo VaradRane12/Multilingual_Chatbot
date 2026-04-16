@@ -42,7 +42,7 @@ flowchart TD
     J11 --> K
 
     L[translation_eval_all.csv] --> M[evaluate_translation.py]
-    M --> N[Translator model nllb-600M or nllb-1.3B]
+    M --> N[Translator model indictrans2 or nllb-*]
     N --> O[Per-row BLEU + latency]
     O --> P[scored_translation_eval_all_*.csv]
 
@@ -124,7 +124,12 @@ Metadata includes:
   - metadata.json
   - extractor.joblib
   - chosen classifier .joblib
-  - translator model (default nllb-600M)
+  - translator model (default indictrans2)
+
+Translator behavior:
+- For Indian language routes (en<->indic or indic<->indic), it uses IndicTrans2 checkpoints.
+- For non-Indic routes (for example en->fr), it falls back to NLLB-600M.
+- If IndicTrans2 checkpoint access fails, code falls back to NLLB-600M and continues.
 
 ### Step 3.2: User Message Flow
 In MultilingualChatbotPipeline.run:
@@ -169,7 +174,7 @@ In the Live Accuracy tab:
 
 ### Step 5.2: Row-wise Scoring
 - evaluate_translation.py:
-  - loads model (e.g., nllb-600M, nllb-1.3B)
+  - loads model (default: indictrans2)
   - translates source -> target
   - computes sentence BLEU vs reference
   - records latency per row
@@ -228,15 +233,21 @@ Run app:
 - streamlit run streamlit_app.py
 
 Evaluate translation (example):
+- python evaluate_translation.py --input translation_eval_all.csv --model indictrans2 --output report_assets/csvs/scored_translation_eval_all_indictrans2.csv
 - python evaluate_translation.py --input translation_eval_all.csv --model nllb-600M --output report_assets/csvs/scored_translation_eval_all_600m.csv
 - python evaluate_translation.py --input translation_eval_all.csv --model nllb-1.3B --output report_assets/csvs/scored_translation_eval_all_1p3b.csv
 
 Generate charts:
-- python make_graphs.py --translation report_assets/csvs/scored_translation_eval_all_600m.csv --translation report_assets/csvs/scored_translation_eval_all_1p3b.csv --outdir report_assets/charts
+- python make_graphs.py --translation report_assets/csvs/scored_translation_eval_all_indictrans2.csv --translation report_assets/csvs/scored_translation_eval_all_600m.csv --translation report_assets/csvs/scored_translation_eval_all_1p3b.csv --outdir report_assets/charts
 
 ## 10) Current Snapshot (Your Workspace)
 
 - Intent side uses TF-IDF + sklearn classifier artifacts.
 - Runtime app has two tabs: normal chatbot and live accuracy chatbot.
-- Translation evaluation supports multiple NLLB sizes.
+- Translation evaluation supports IndicTrans2 plus NLLB comparison models.
 - Report bundle is under report_assets/csvs and report_assets/charts.
+
+Latest recorded evaluation snapshot:
+- IndicTrans2 average BLEU: 60.94 (translation_eval_all.csv)
+- NLLB-600M average BLEU: 61.76
+- NLLB-1.3B average BLEU: 59.45
