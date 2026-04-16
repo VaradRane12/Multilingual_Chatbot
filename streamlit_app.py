@@ -49,52 +49,16 @@ def build_reply(intent: str, target_lang: str, translator: Translator | None) ->
     if translator is None or not target_lang or target_lang in {"en", "unknown"}:
         return english_reply
 
-    try:
-        translated = translator.translate(english_reply, "en", target_lang)
-        return translated.get("translation", english_reply)
-    except Exception:
-        return english_reply
+    translated = translator.translate(english_reply, "en", target_lang)
+    return translated["translation"]
 
 
 def compute_bleu_score(candidate_text: str, reference_text: str) -> float:
-    # Use sacrebleu when available, otherwise use NLTK BLEU as fallback.
-    try:
-        import importlib
+    import importlib
 
-        sacrebleu_metrics = importlib.import_module("sacrebleu.metrics")
-        metric = sacrebleu_metrics.BLEU(effective_order=True)
-        return round(float(metric.sentence_score(candidate_text, [reference_text]).score), 2)
-    except Exception:
-        # Small built-in BLEU-4 fallback with add-one smoothing.
-        reference_tokens = reference_text.split()
-        candidate_tokens = candidate_text.split()
-        if not reference_tokens or not candidate_tokens:
-            return 0.0
-
-        def ngram_counts(tokens: list[str], n: int) -> dict[tuple[str, ...], int]:
-            counts: dict[tuple[str, ...], int] = {}
-            for i in range(len(tokens) - n + 1):
-                key = tuple(tokens[i : i + n])
-                counts[key] = counts.get(key, 0) + 1
-            return counts
-
-        precisions: list[float] = []
-        for n in (1, 2, 3, 4):
-            candidate_ngrams = ngram_counts(candidate_tokens, n)
-            reference_ngrams = ngram_counts(reference_tokens, n)
-            overlap = 0
-            total = 0
-            for ngram, count in candidate_ngrams.items():
-                overlap += min(count, reference_ngrams.get(ngram, 0))
-                total += count
-            precisions.append((overlap + 1.0) / (total + 1.0))
-
-        geometric_mean = math.exp(sum(math.log(p) for p in precisions) / 4.0)
-        candidate_len = len(candidate_tokens)
-        reference_len = len(reference_tokens)
-        brevity_penalty = 1.0 if candidate_len > reference_len else math.exp(1.0 - (reference_len / max(candidate_len, 1)))
-
-        return round(float(100.0 * brevity_penalty * geometric_mean), 2)
+    sacrebleu_metrics = importlib.import_module("sacrebleu.metrics")
+    metric = sacrebleu_metrics.BLEU(effective_order=True)
+    return round(float(metric.sentence_score(candidate_text, [reference_text]).score), 2)
 
 
 @st.cache_resource(show_spinner=False)
@@ -155,11 +119,7 @@ def main() -> None:
             st.markdown("### Training Metrics")
             st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True)
 
-    try:
-        pipeline = load_pipeline(selected_classifier)
-    except FileNotFoundError as error:
-        st.error(str(error))
-        st.stop()
+    pipeline = load_pipeline(selected_classifier)
 
     # Read available intent labels from the loaded classifier.
     intent_labels: list[str] = []
