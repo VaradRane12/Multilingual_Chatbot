@@ -246,9 +246,23 @@ class IntentClassifier:
 
 
 class Translator:
-    """Translate text using NLLB, mBART, Opus-MT, or Google translator."""
+    """Translate text using IndicTrans2, NLLB, mBART, Opus-MT, or Google translator."""
 
     MODEL_IDS = {
+        "indictrans2": {
+            "en_indic": [
+                "ai4bharat/indictrans2-en-indic-dist-200M",
+                "ai4bharat/indictrans2-en-indic-1B",
+            ],
+            "indic_en": [
+                "ai4bharat/indictrans2-indic-en-dist-200M",
+                "ai4bharat/indictrans2-indic-en-1B",
+            ],
+            "indic_indic": [
+                "ai4bharat/indictrans2-indic-indic-dist-320M",
+                "ai4bharat/indictrans2-indic-indic-1B",
+            ],
+        },
         "nllb-600M": "facebook/nllb-200-distilled-600M",
         "nllb-1.3B": "facebook/nllb-200-1.3B",
         "mbart50": "facebook/mbart-large-50-many-to-many-mmt",
@@ -264,6 +278,41 @@ class Translator:
         "de": "deu_Latn",
         "it": "ita_Latn",
         "pt": "por_Latn",
+    }
+
+    INDIC_LANGUAGE_MAP = {
+        "en": "eng_Latn",
+        "hi": "hin_Deva",
+        "mr": "mar_Deva",
+        "sa": "san_Deva",
+        "bn": "ben_Beng",
+        "gu": "guj_Gujr",
+        "kn": "kan_Knda",
+        "ml": "mal_Mlym",
+        "or": "ory_Orya",
+        "pa": "pan_Guru",
+        "ta": "tam_Taml",
+        "te": "tel_Telu",
+        "ur": "urd_Arab",
+        "ne": "npi_Deva",
+        "as": "asm_Beng",
+    }
+
+    INDIC_FLORES_CODES = {
+        "hin_Deva",
+        "mar_Deva",
+        "san_Deva",
+        "ben_Beng",
+        "guj_Gujr",
+        "kan_Knda",
+        "mal_Mlym",
+        "ory_Orya",
+        "pan_Guru",
+        "tam_Taml",
+        "tel_Telu",
+        "urd_Arab",
+        "npi_Deva",
+        "asm_Beng",
     }
 
     MBART_LANGUAGE_MAP = {
@@ -283,9 +332,17 @@ class Translator:
         self._model = None
         self._tokenizer = None
         self._google_client = None
+        self._model_cache: dict[str, Any] = {}
+        self._tokenizer_cache: dict[str, Any] = {}
+        self._warned_indictrans_fallback = False
         self._load_model()
 
     def _load_model(self) -> None:
+        if self.model_name == "indictrans2":
+            # IndicTrans2 needs different checkpoints for en->indic, indic->en, indic->indic.
+            # We load them lazily per translation pair.
+            return
+
         if self.model_name in self.MODEL_IDS:
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
@@ -298,6 +355,49 @@ class Translator:
             from googletrans import Translator as GoogleTranslator
 
             self._google_client = GoogleTranslator()
+
+    def _get_or_load_hf_model(self, model_id: str) -> tuple[Any, Any]:
+        if model_id not in self._model_cache or model_id not in self._tokenizer_cache:
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+            is_indictrans = model_id.startswith("ai4bharat/indictrans2")
+            self._tokenizer_cache[model_id] = AutoTokenizer.from_pretrained(
+                model_id,
+                trust_remote_code=is_indictrans,
+                use_fast=not is_indictrans,
+            )
+            self._model_cache[model_id] = AutoModelForSeq2SeqLM.from_pretrained(
+                model_id,
+                trust_remote_code=is_indictrans,
+            )
+        return self._model_cache[model_id], self._tokenizer_cache[model_id]
+
+    def _translate_with_nllb_fallback(self, text: str, src_lang: str, tgt_lang: str) -> str:
+        fallback_model_id = self.MODEL_IDS["nllb-600M"]
+        model, tokenizer = self._get_or_load_hf_model(fallback_model_id)
+        fallback_source = self._normalize_nllb_code(src_lang)
+        fallback_target = self._normalize_nllb_code(tgt_lang)
+        return self._hf_translate_with_model(text, fallback_source, fallback_target, model, tokenizer)
+
+    def _translate_with_model_candidates(self, text: str, source: str, target: str, model_candidates: list[str]) -> str:
+        last_error = None
+        for model_id in model_candidates:
+            try:
+                model, tokenizer = self._get_or_load_hf_model(model_id)
+                return self._hf_translate_with_model(text, source, target, model, tokenizer)
+            except Exception as error:
+                last_error = error
+
+        if not self._warned_indictrans_fallback:
+            print(
+                "IndicTrans2 models are unavailable (likely gated/no-access). "
+                "Falling back to NLLB-600M for this run."
+            )
+            if last_error is not None:
+                print(f"Last IndicTrans2 load error: {type(last_error).__name__}: {last_error}")
+            self._warned_indictrans_fallback = True
+
+        return self._translate_with_nllb_fallback(text, source, target)
 
     def _normalize_nllb_code(self, code: str) -> str:
         if not code:
@@ -313,39 +413,91 @@ class Translator:
             return code
         return self.MBART_LANGUAGE_MAP.get(code.lower(), "en_XX")
 
-    def _target_language_token_id(self, target_language_code: str) -> int:
+    def _normalize_indic_code(self, code: str) -> str:
+        if not code:
+            return "eng_Latn"
+        if "_" in code and len(code) >= 8:
+            return code
+        normalized = code.lower()
+        if normalized in self.INDIC_LANGUAGE_MAP:
+            return self.INDIC_LANGUAGE_MAP[normalized]
+        # Keep non-Indic languages mappable for fallback routing.
+        if normalized in self.NLLB_LANGUAGE_MAP:
+            return self.NLLB_LANGUAGE_MAP[normalized]
+        return normalized
+
+    def _is_indic_language(self, flores_code: str) -> bool:
+        return flores_code in self.INDIC_FLORES_CODES
+
+    def _target_language_token_id(self, target_language_code: str, tokenizer: Any) -> int:
         # Different tokenizer versions expose this differently.
-        if hasattr(self._tokenizer, "lang_code_to_id") and self._tokenizer.lang_code_to_id:
-            if target_language_code in self._tokenizer.lang_code_to_id:
-                return int(self._tokenizer.lang_code_to_id[target_language_code])
+        if hasattr(tokenizer, "lang_code_to_id") and tokenizer.lang_code_to_id:
+            if target_language_code in tokenizer.lang_code_to_id:
+                return int(tokenizer.lang_code_to_id[target_language_code])
 
-        if hasattr(self._tokenizer, "get_lang_id"):
-            return int(self._tokenizer.get_lang_id(target_language_code))
+        if hasattr(tokenizer, "get_lang_id"):
+            return int(tokenizer.get_lang_id(target_language_code))
 
-        token_id = self._tokenizer.convert_tokens_to_ids(target_language_code)
+        token_id = tokenizer.convert_tokens_to_ids(target_language_code)
         if token_id is None:
             raise ValueError(f"Unsupported target language code: {target_language_code}")
         return int(token_id)
 
-    def _hf_translate(self, text: str, source_code: str, target_code: str) -> str:
+    def _hf_translate_with_model(self, text: str, source_code: str, target_code: str, model: Any, tokenizer: Any) -> str:
         import torch
 
-        self._tokenizer.src_lang = source_code
-        encoded = self._tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-        bos_token_id = self._target_language_token_id(target_code)
+        is_indictrans = model.__class__.__module__.startswith("transformers_modules.ai4bharat.indictrans2")
+        if is_indictrans:
+            # IndicTrans2 tokenizer expects: "<src_lang> <tgt_lang> <text>".
+            tagged_text = f"{source_code} {target_code} {text}"
+            encoded = tokenizer(tagged_text, return_tensors="pt", truncation=True, max_length=512)
+            generation_kwargs = {"use_cache": False}
+        else:
+            tokenizer.src_lang = source_code
+            encoded = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+            bos_token_id = self._target_language_token_id(target_code, tokenizer)
+            generation_kwargs = {"forced_bos_token_id": bos_token_id}
 
         with torch.no_grad():
-            generated = self._model.generate(
+            generated = model.generate(
                 **encoded,
-                forced_bos_token_id=bos_token_id,
                 max_length=512,
+                **generation_kwargs,
             )
-        return self._tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
+        return tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
+
+    def _hf_translate(self, text: str, source_code: str, target_code: str) -> str:
+        return self._hf_translate_with_model(text, source_code, target_code, self._model, self._tokenizer)
+
+    def _indictrans2_translate(self, text: str, src_lang: str, tgt_lang: str) -> str:
+        source = self._normalize_indic_code(src_lang)
+        target = self._normalize_indic_code(tgt_lang)
+
+        if source == target:
+            return text
+
+        model_ids = self.MODEL_IDS["indictrans2"]
+        source_is_indic = self._is_indic_language(source)
+        target_is_indic = self._is_indic_language(target)
+
+        if source == "eng_Latn" and target_is_indic:
+            return self._translate_with_model_candidates(text, source, target, model_ids["en_indic"])
+
+        if source_is_indic and target == "eng_Latn":
+            return self._translate_with_model_candidates(text, source, target, model_ids["indic_en"])
+
+        if source_is_indic and target_is_indic:
+            return self._translate_with_model_candidates(text, source, target, model_ids["indic_indic"])
+
+        # Keep non-Indic language pairs working by falling back to NLLB.
+        return self._translate_with_nllb_fallback(text, src_lang, tgt_lang)
 
     def translate(self, text: str, src_lang: str, tgt_lang: str) -> dict:
         start_time = time.perf_counter()
 
-        if self.model_name in {"nllb-600M", "nllb-1.3B"}:
+        if self.model_name == "indictrans2":
+            translated_text = self._indictrans2_translate(text, src_lang, tgt_lang)
+        elif self.model_name in {"nllb-600M", "nllb-1.3B"}:
             source = self._normalize_nllb_code(src_lang)
             target = self._normalize_nllb_code(tgt_lang)
             translated_text = self._hf_translate(text, source, target)

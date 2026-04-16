@@ -116,7 +116,7 @@ def load_pipeline(classifier_name: str | None = None) -> MultilingualChatbotPipe
 
     extractor = joblib.load(extractor_file)
     classifier = joblib.load(classifier_file)
-    translator = Translator(model="nllb-600M")
+    translator = Translator(model="indictrans2")
 
     return MultilingualChatbotPipeline(
         detector=LanguageDetector(backend=model_config.get("detector_backend", "langdetect")),

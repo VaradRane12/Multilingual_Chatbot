@@ -2,7 +2,7 @@
 
 Usage:
     python evaluate_translation.py
-    python evaluate_translation.py --input translation_eval.csv --model nllb-600M
+    python evaluate_translation.py --input translation_eval.csv --model indictrans2
     python evaluate_translation.py --output scored_translation_eval.csv
 """
 
@@ -64,7 +64,7 @@ def read_rows(csv_path: Path) -> list[dict[str, str]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate translation quality with BLEU.")
     parser.add_argument("--input", default="translation_eval.csv", help="CSV file with source_text, source_lang, target_lang, reference_translation")
-    parser.add_argument("--model", default="nllb-600M", help="Translator model name")
+    parser.add_argument("--model", default="indictrans2", help="Translator model name")
     parser.add_argument("--output", default="", help="Optional CSV path to save scored results")
     args = parser.parse_args()
 
@@ -131,6 +131,7 @@ def main() -> None:
 
     if args.output:
         output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w", encoding="utf-8", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=["source_text", "source_lang", "target_lang", "reference_translation", "predicted_translation", "bleu", "latency_ms"])
             writer.writeheader()

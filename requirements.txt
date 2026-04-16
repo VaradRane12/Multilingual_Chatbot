@@ -12,9 +12,10 @@ langdetect>=1.0.9
 langid>=1.1.6
 nltk>=3.8.1
 
-# Translation (NLLB)
+# Translation (IndicTrans2 + fallback models)
 transformers>=4.38.0
 torch>=2.0.0
+sentencepiece>=0.1.99
 googletrans==4.0.0rc1
 
 # App
