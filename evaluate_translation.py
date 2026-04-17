@@ -18,42 +18,11 @@ from pipeline import Translator
 
 
 def compute_bleu_score(candidate_text: str, reference_text: str) -> float:
-    # Use sacrebleu when available, otherwise fall back to a tiny built-in BLEU.
-    try:
-        import importlib
+    import importlib
 
-        sacrebleu_metrics = importlib.import_module("sacrebleu.metrics")
-        metric = sacrebleu_metrics.BLEU(effective_order=True)
-        return round(float(metric.sentence_score(candidate_text, [reference_text]).score), 2)
-    except Exception:
-        reference_tokens = reference_text.split()
-        candidate_tokens = candidate_text.split()
-        if not reference_tokens or not candidate_tokens:
-            return 0.0
-
-        def ngram_counts(tokens: list[str], n: int) -> dict[tuple[str, ...], int]:
-            counts: dict[tuple[str, ...], int] = {}
-            for i in range(len(tokens) - n + 1):
-                key = tuple(tokens[i : i + n])
-                counts[key] = counts.get(key, 0) + 1
-            return counts
-
-        precisions: list[float] = []
-        for n in (1, 2, 3, 4):
-            candidate_ngrams = ngram_counts(candidate_tokens, n)
-            reference_ngrams = ngram_counts(reference_tokens, n)
-            overlap = 0
-            total = 0
-            for ngram, count in candidate_ngrams.items():
-                overlap += min(count, reference_ngrams.get(ngram, 0))
-                total += count
-            precisions.append((overlap + 1.0) / (total + 1.0))
-
-        geometric_mean = math.exp(sum(math.log(score) for score in precisions) / 4.0)
-        candidate_len = len(candidate_tokens)
-        reference_len = len(reference_tokens)
-        brevity_penalty = 1.0 if candidate_len > reference_len else math.exp(1.0 - (reference_len / max(candidate_len, 1)))
-        return round(float(100.0 * brevity_penalty * geometric_mean), 2)
+    sacrebleu_metrics = importlib.import_module("sacrebleu.metrics")
+    metric = sacrebleu_metrics.BLEU(effective_order=True)
+    return round(float(metric.sentence_score(candidate_text, [reference_text]).score), 2)
 
 
 def read_rows(csv_path: Path) -> list[dict[str, str]]:

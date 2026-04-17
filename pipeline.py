@@ -22,41 +22,18 @@ class LanguageDetector:
         self._setup_backend()
 
     def _setup_backend(self) -> None:
-        if self.backend == "langdetect":
-            from langdetect import DetectorFactory, detect
+        if self.backend != "langdetect":
+            raise ValueError("Only default langdetect backend is supported.")
 
-            DetectorFactory.seed = 42
-            self._detect_fn = detect
-            return
+        from langdetect import DetectorFactory, detect
 
-        if self.backend == "langid":
-            import langid
-
-            self._detect_fn = lambda text: langid.classify(text)[0]
-            return
-
-        if self.backend == "fasttext":
-            import fasttext
-
-            model_file = self.model_path or "lid.176.ftz"
-            self._fasttext_model = fasttext.load_model(model_file)
-            return
-
-        raise ValueError(f"Unknown language detector backend: {self.backend}")
+        DetectorFactory.seed = 42
+        self._detect_fn = detect
 
     def detect(self, text: str) -> dict:
         start_time = time.perf_counter()
-        try:
-            if self.backend == "fasttext":
-                labels, probs = self._fasttext_model.predict(text.replace("\n", " "), k=1)
-                language = labels[0].replace("__label__", "")
-                confidence = float(probs[0])
-            else:
-                language = self._detect_fn(text)
-                confidence = None
-        except Exception:
-            language = "unknown"
-            confidence = 0.0
+        language = self._detect_fn(text)
+        confidence = None
 
         latency_ms = (time.perf_counter() - start_time) * 1000
         return {"lang": language, "confidence": confidence, "latency_ms": round(latency_ms, 2)}
@@ -89,14 +66,11 @@ class TextPreprocessor:
         if self.stopwords_mode == "custom":
             return {word.lower() for word in self.custom_stopwords}
 
-        try:
-            import nltk
-            from nltk.corpus import stopwords
+        import nltk
+        from nltk.corpus import stopwords
 
-            nltk.download("stopwords", quiet=True)
-            return set(stopwords.words(self.language))
-        except Exception:
-            return set()
+        nltk.download("stopwords", quiet=True)
+        return set(stopwords.words(self.language))
 
     def _normalize_text(self, text: str) -> str:
         cleaned = text
@@ -137,51 +111,26 @@ class FeatureExtractor:
         self.max_features = max_features
         self.model_name = model_name
         self._vectorizer = None
-        self._ft_model = None
-        self._st_model = None
-
-        if self.method not in {"tfidf", "fasttext_avg", "sentence_transformer"}:
-            raise ValueError(f"Unsupported feature method: {self.method}")
+        if self.method != "tfidf":
+            raise ValueError("Only tfidf feature extraction is supported.")
 
     def fit(self, corpus: list[str]) -> "FeatureExtractor":
-        if self.method == "tfidf":
-            from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.feature_extraction.text import TfidfVectorizer
 
-            self._vectorizer = TfidfVectorizer(
-                max_features=self.max_features,
-                ngram_range=(1, 2),
-                sublinear_tf=True,
-            )
-            self._vectorizer.fit(corpus)
-            return self
-
-        if self.method == "fasttext_avg":
-            import fasttext
-
-            self._ft_model = fasttext.load_model("cc.en.300.bin")
-            return self
-
-        from sentence_transformers import SentenceTransformer
-
-        self._st_model = SentenceTransformer(self.model_name)
+        self._vectorizer = TfidfVectorizer(
+            max_features=self.max_features,
+            ngram_range=(1, 2),
+            sublinear_tf=True,
+        )
+        self._vectorizer.fit(corpus)
         return self
 
     def transform(self, texts: list[str]) -> tuple[Any, float]:
-        import numpy as np
-
         start_time = time.perf_counter()
 
-        if self.method == "tfidf":
-            if self._vectorizer is None:
-                raise RuntimeError("Call fit() before transform()")
-            vectors = self._vectorizer.transform(texts)
-        elif self.method == "fasttext_avg":
-            vectors = np.vstack([
-                np.mean([self._ft_model.get_word_vector(word) for word in text.split()] or [np.zeros(300)], axis=0)
-                for text in texts
-            ])
-        else:
-            vectors = self._st_model.encode(texts, show_progress_bar=False)
+        if self._vectorizer is None:
+            raise RuntimeError("Call fit() before transform()")
+        vectors = self._vectorizer.transform(texts)
 
         latency_ms = (time.perf_counter() - start_time) * 1000
         return vectors, round(latency_ms, 2)
@@ -246,12 +195,11 @@ class IntentClassifier:
 
 
 class Translator:
-    """Translate text using NLLB, mBART, Opus-MT, or Google translator."""
+    """Translate text using NLLB models."""
 
     MODEL_IDS = {
         "nllb-600M": "facebook/nllb-200-distilled-600M",
         "nllb-1.3B": "facebook/nllb-200-1.3B",
-        "mbart50": "facebook/mbart-large-50-many-to-many-mmt",
     }
 
     NLLB_LANGUAGE_MAP = {
@@ -266,23 +214,11 @@ class Translator:
         "pt": "por_Latn",
     }
 
-    MBART_LANGUAGE_MAP = {
-        "en": "en_XX",
-        "hi": "hi_IN",
-        "sa": "hi_IN",
-        "fr": "fr_XX",
-        "es": "es_XX",
-        "de": "de_DE",
-        "it": "it_IT",
-        "pt": "pt_XX",
-    }
-
     def __init__(self, model: str = "nllb-600M", device: str = "cpu"):
         self.model_name = model
         self.device = device
         self._model = None
         self._tokenizer = None
-        self._google_client = None
         self._load_model()
 
     def _load_model(self) -> None:
@@ -294,24 +230,12 @@ class Translator:
             self._model = AutoModelForSeq2SeqLM.from_pretrained(hf_model_name)
             return
 
-        if self.model_name == "google":
-            from googletrans import Translator as GoogleTranslator
-
-            self._google_client = GoogleTranslator()
-
     def _normalize_nllb_code(self, code: str) -> str:
         if not code:
             return "eng_Latn"
         if "_" in code and len(code) >= 8:
             return code
         return self.NLLB_LANGUAGE_MAP.get(code.lower(), "eng_Latn")
-
-    def _normalize_mbart_code(self, code: str) -> str:
-        if not code:
-            return "en_XX"
-        if "_" in code and len(code) >= 4:
-            return code
-        return self.MBART_LANGUAGE_MAP.get(code.lower(), "en_XX")
 
     def _target_language_token_id(self, target_language_code: str) -> int:
         # Different tokenizer versions expose this differently.
@@ -349,23 +273,8 @@ class Translator:
             source = self._normalize_nllb_code(src_lang)
             target = self._normalize_nllb_code(tgt_lang)
             translated_text = self._hf_translate(text, source, target)
-        elif self.model_name == "mbart50":
-            source = self._normalize_mbart_code(src_lang)
-            target = self._normalize_mbart_code(tgt_lang)
-            translated_text = self._hf_translate(text, source, target)
-        elif self.model_name == "opus-mt":
-            from transformers import MarianMTModel, MarianTokenizer
-
-            pair = f"{src_lang[:2]}-{tgt_lang[:2]}"
-            model_name = f"Helsinki-NLP/opus-mt-{pair}"
-            tokenizer = MarianTokenizer.from_pretrained(model_name)
-            model = MarianMTModel.from_pretrained(model_name)
-            encoded = tokenizer([text], return_tensors="pt", padding=True)
-            translated_text = tokenizer.decode(model.generate(**encoded)[0], skip_special_tokens=True)
-        elif self.model_name == "google" and self._google_client is not None:
-            translated_text = self._google_client.translate(text, src=src_lang, dest=tgt_lang).text
         else:
-            translated_text = text
+            raise ValueError(f"Unsupported translator model: {self.model_name}")
 
         latency_ms = (time.perf_counter() - start_time) * 1000
         return {
@@ -415,7 +324,7 @@ class MultilingualChatbotPipeline:
         cleaned_text = " ".join(preprocessing["tokens"])
 
         # 4) Convert text to vectors.
-        if self.extractor._vectorizer or self.extractor._ft_model or self.extractor._st_model:
+        if self.extractor._vectorizer:
             vectors, feature_latency_ms = self.extractor.transform([cleaned_text])
             shape = list(vectors.shape) if hasattr(vectors, "shape") else "unknown"
             result["features"] = {"shape": shape, "latency_ms": feature_latency_ms}
