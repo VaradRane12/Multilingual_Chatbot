@@ -1,0 +1,41 @@
+source_text,source_lang,target_lang,reference_translation,predicted_translation,bleu,latency_ms
+I need a flight from Mumbai to Delhi,en,hi,मुझे मुंबई से दिल्ली की एक उड़ान चाहिए,मुझे मुंबई से दिल्ली के लिए एक उड़ान चाहिए,52.54,17743.34
+Book a hotel in Pune,en,hi,पुणे में एक होटल बुक करें,पुणे में होटल बुक करें,49.47,10642.67
+What is the cheapest fare to Goa?,en,hi,गोवा के लिए सबसे सस्ता किराया क्या है?,गोवा के लिए सबसे सस्ता किराया क्या है?,100.00,2174.04
+Cancel my booking please,en,hi,कृपया मेरी बुकिंग रद्द करें,कृपया मेरी बुकिंग रद्द करें,100.00,1080.73
+I want two tickets to Chennai,en,hi,मुझे चेन्नई के लिए दो टिकट चाहिए,मैं चेन्नई के लिए दो टिकट चाहता हूँ,58.74,1342.95
+I need a flight from Mumbai to Delhi,en,mr,मला मुंबईहून दिल्लीला एक उड्डाण हवे आहे,मला मुंबई ते दिल्लीची फ्लाइट हवी आहे.,18.58,1339.72
+Book a hotel in Pune,en,mr,पुण्यात एक हॉटेल बुक करा,पुण्यात हॉटेल बुक करा.,39.57,1423.96
+What is the cheapest fare to Goa?,en,mr,गोव्यासाठी सर्वात स्वस्त भाडे किती आहे?,गोवासाठी सर्वात स्वस्त दर काय आहे?,31.24,2497.64
+Cancel my booking please,en,mr,कृपया माझी बुकिंग रद्द करा,माझी बुकिंग रद्द करा.,52.08,1992.70
+I want two tickets to Chennai,en,mr,मला चेन्नईसाठी दोन तिकिटे हवी आहेत,मला चेन्नईसाठी दोन तिकीट हवे आहेत.,41.11,1943.26
+I need a flight from Mumbai to Delhi,en,sa,मम मुंबईतः दिल्लीं प्रति विमानयानं आवश्यकः,मम विमानम् मुम्बई-दिल्ली-पर्यन्तम् अस्ति।,21.79,1668.36
+Book a hotel in Pune,en,sa,पुणे नगरे एकं होटलं आरक्षयतु,पुणे-नगरस्य होटलम् आरक्षय,23.20,1161.68
+What is the cheapest fare to Goa?,en,sa,गोआं प्रति सर्वं न्यूनतमं भाड़ं किम् अस्ति?,गोवायां किं सस्ता?,11.91,792.26
+Cancel my booking please,en,sa,मम आरक्षणं रद्दयतु,मम आरक्षणं रद्दं करोतु।,47.29,1008.90
+I want two tickets to Chennai,en,sa,अहं चेन्नै नगराय द्वे टिकटे इच्छामि,चेन्नई-याम् द्वौ टिकटानि मया अपेक्षितानि।,18.80,2239.74
+I need a flight from Mumbai to Delhi,en,fr,J'ai besoin d'un vol de Mumbai à Delhi,J'ai besoin d' un vol de Mumbai à Delhi,58.14,1298.79
+Book a hotel in Pune,en,fr,Réservez un hôtel à Pune,Réservez un hôtel à Pune,100.00,993.38
+What is the cheapest fare to Goa?,en,fr,Quel est le tarif le moins cher pour Goa ?,Quel est le tarif le moins cher pour Goa ?,100.00,1066.65
+Cancel my booking please,en,fr,Veuillez annuler ma réservation,Annuler ma réservation s'il vous plaît,29.07,1055.91
+I want two tickets to Chennai,en,fr,Je veux deux billets pour Chennai,Je veux deux billets pour Chennai.,80.91,1212.92
+I need a flight from Mumbai to Delhi,en,es,Necesito un vuelo de Mumbai a Delhi,Necesito un vuelo de Mumbai a Delhi.,84.09,1147.41
+Book a hotel in Pune,en,es,Reserve un hotel en Pune,Reserva un hotel en Pune,75.98,874.66
+What is the cheapest fare to Goa?,en,es,¿Cuál es la tarifa más barata a Goa?,¿Cuál es el pasaje más barato a Goa?,27.78,1603.42
+Cancel my booking please,en,es,Por favor cancela mi reserva,Cancela mi reserva por favor,38.61,1292.49
+I want two tickets to Chennai,en,es,Quiero dos billetes para Chennai,Quiero dos boletos para Chennai.,38.61,1156.66
+I need a flight from Mumbai to Delhi,en,de,Ich brauche einen Flug von Mumbai nach Delhi,Ich brauche einen Flug von Mumbai nach Delhi.,86.33,1069.61
+Book a hotel in Pune,en,de,Buchen Sie ein Hotel in Pune,Buchen Sie ein Hotel in Pune,100.00,860.15
+What is the cheapest fare to Goa?,en,de,Wie hoch ist der günstigste Fahrpreis nach Goa?,Was ist der billigste Fahrpreis nach Goa?,35.64,1155.08
+Cancel my booking please,en,de,Bitte stornieren Sie meine Buchung,Bitte streiche meine Buchung ab .,31.24,1048.77
+I want two tickets to Chennai,en,de,Ich möchte zwei Tickets nach Chennai,Ich will zwei Tickets nach Chennai.,43.47,1121.89
+I need a flight from Mumbai to Delhi,en,it,Ho bisogno di un volo da Mumbai a Delhi,Ho bisogno di un volo da Mumbai a Delhi.,88.01,1049.48
+Book a hotel in Pune,en,it,Prenota un hotel a Pune,Prenota un hotel a Pune,100.00,938.27
+What is the cheapest fare to Goa?,en,it,Qual è la tariffa più economica per Goa?,Qual è la tariffa più economica per Goa?,100.00,1879.57
+Cancel my booking please,en,it,Per favore annulla la mia prenotazione,"Annulla la mia prenotazione , per favore .",31.56,1756.38
+I want two tickets to Chennai,en,it,Voglio due biglietti per Chennai,Voglio due biglietti per Chennai.,75.98,1023.67
+I need a flight from Mumbai to Delhi,en,pt,Preciso de um voo de Mumbai para Delhi,Preciso de um voo de Mumbai para Delhi.,86.33,990.55
+Book a hotel in Pune,en,pt,Reserve um hotel em Pune,Reserve um hotel em Pune,100.00,622.67
+What is the cheapest fare to Goa?,en,pt,Qual é a tarifa mais barata para Goa?,Qual é a tarifa mais barata para Goa?,100.00,1178.94
+Cancel my booking please,en,pt,"Cancele minha reserva, por favor","Cancele a minha reserva , por favor .",23.98,1132.22
+I want two tickets to Chennai,en,pt,Quero dois bilhetes para Chennai,Quero dois bilhetes para Chennai.,75.98,1036.80
