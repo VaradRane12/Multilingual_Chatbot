@@ -111,51 +111,26 @@ class FeatureExtractor:
         self.max_features = max_features
         self.model_name = model_name
         self._vectorizer = None
-        self._ft_model = None
-        self._st_model = None
-
-        if self.method not in {"tfidf", "fasttext_avg", "sentence_transformer"}:
-            raise ValueError(f"Unsupported feature method: {self.method}")
+        if self.method != "tfidf":
+            raise ValueError("Only tfidf feature extraction is supported.")
 
     def fit(self, corpus: list[str]) -> "FeatureExtractor":
-        if self.method == "tfidf":
-            from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.feature_extraction.text import TfidfVectorizer
 
-            self._vectorizer = TfidfVectorizer(
-                max_features=self.max_features,
-                ngram_range=(1, 2),
-                sublinear_tf=True,
-            )
-            self._vectorizer.fit(corpus)
-            return self
-
-        if self.method == "fasttext_avg":
-            import fasttext
-
-            self._ft_model = fasttext.load_model("cc.en.300.bin")
-            return self
-
-        from sentence_transformers import SentenceTransformer
-
-        self._st_model = SentenceTransformer(self.model_name)
+        self._vectorizer = TfidfVectorizer(
+            max_features=self.max_features,
+            ngram_range=(1, 2),
+            sublinear_tf=True,
+        )
+        self._vectorizer.fit(corpus)
         return self
 
     def transform(self, texts: list[str]) -> tuple[Any, float]:
-        import numpy as np
-
         start_time = time.perf_counter()
 
-        if self.method == "tfidf":
-            if self._vectorizer is None:
-                raise RuntimeError("Call fit() before transform()")
-            vectors = self._vectorizer.transform(texts)
-        elif self.method == "fasttext_avg":
-            vectors = np.vstack([
-                np.mean([self._ft_model.get_word_vector(word) for word in text.split()] or [np.zeros(300)], axis=0)
-                for text in texts
-            ])
-        else:
-            vectors = self._st_model.encode(texts, show_progress_bar=False)
+        if self._vectorizer is None:
+            raise RuntimeError("Call fit() before transform()")
+        vectors = self._vectorizer.transform(texts)
 
         latency_ms = (time.perf_counter() - start_time) * 1000
         return vectors, round(latency_ms, 2)
@@ -349,7 +324,7 @@ class MultilingualChatbotPipeline:
         cleaned_text = " ".join(preprocessing["tokens"])
 
         # 4) Convert text to vectors.
-        if self.extractor._vectorizer or self.extractor._ft_model or self.extractor._st_model:
+        if self.extractor._vectorizer:
             vectors, feature_latency_ms = self.extractor.transform([cleaned_text])
             shape = list(vectors.shape) if hasattr(vectors, "shape") else "unknown"
             result["features"] = {"shape": shape, "latency_ms": feature_latency_ms}

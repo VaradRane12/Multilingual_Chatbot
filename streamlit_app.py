@@ -18,6 +18,61 @@ from dataset_utils import load_config
 from pipeline import LanguageDetector, MultilingualChatbotPipeline, TextPreprocessor, Translator
 
 
+INTENT_REPLY_TEMPLATES = {
+    "atis_airfare": [
+        "I can help with airfare. Share route, date, and time window, and I will suggest the cheapest options.",
+        "For fare lookup, tell me origin, destination, travel date, and whether one-way or round trip.",
+    ],
+    "atis_flight": [
+        "I can help find flights. Please share source city, destination city, and preferred date/time.",
+        "Got it. Tell me route and schedule preference, and I will narrow flight options.",
+    ],
+    "atis_airline": [
+        "I can check airline options for your route. Share source, destination, and date.",
+        "Tell me your route and travel date, and I will list relevant airlines.",
+    ],
+    "atis_flight_no": [
+        "I can help with flight numbers. Please share route, date, and approximate departure time.",
+        "Share source, destination, and timing details, and I will help identify the flight number.",
+    ],
+    "atis_flight_time": [
+        "I can help with flight timings. Tell me route and date, and I will suggest suitable departures.",
+        "Please share origin, destination, and date so I can provide flight time options.",
+    ],
+    "atis_airport": [
+        "I can help with airport information. Tell me the city or route you are planning.",
+        "Share the city/route details and I can suggest relevant airports.",
+    ],
+    "atis_ground_service": [
+        "I can help with ground transport. Share airport and destination area for better suggestions.",
+        "Tell me your airport and where you want to go, and I will suggest ground service options.",
+    ],
+    "atis_hotel": [
+        "I can help with hotel options. Please share city, check-in date, and budget range.",
+        "Share destination, dates, and budget, and I will guide hotel choices.",
+    ],
+}
+
+
+def infer_intent_hint_from_text(text: str) -> str | None:
+    lowered = text.lower()
+    # Lightweight keyword hints for multilingual prompts when the classifier is uncertain or too broad.
+    hint_keywords = {
+        "atis_airfare": ["cheap", "cheapest", "fare", "price", "cost", "सस्ती", "किराया", "स्वस्त", "भाडे"],
+        "atis_flight_time": ["time", "timing", "schedule", "सुबह", "शाम", "समय", "वेळ", "सकाळ", "सायंकाळ"],
+        "atis_flight_no": ["flight number", "number", "उड़ान संख्या", "फ्लाइट नंबर", "क्रमांक"],
+        "atis_airline": ["airline", "airlines", "carrier", "एयरलाइन", "एयरलाइंस", "विमानसेवा", "एअरलाईन्स"],
+        "atis_airport": ["airport", "terminal", "airfield", "एयरपोर्ट", "हवाईअड्डा", "विमानतळ"],
+        "atis_ground_service": ["ground", "taxi", "cab", "bus", "metro", "transport", "ग्राउंड", "टैक्सी", "बस", "मेट्रो", "ट्रान्सपोर्ट"],
+        "atis_hotel": ["hotel", "stay", "accommodation", "होटल", "रहना", "निवास"],
+    }
+
+    for hint, words in hint_keywords.items():
+        if any(word in lowered for word in words):
+            return hint
+    return None
+
+
 @st.cache_data(show_spinner=False)
 def load_app_config() -> dict:
     # Read config once and reuse it across Streamlit reruns.
@@ -39,12 +94,26 @@ def clean_intent_name(intent: str) -> str:
     return intent.replace("atis_", "").replace("_", " ").strip() or intent
 
 
-def build_reply(intent: str, target_lang: str, translator: Translator | None) -> str:
-    # Keep base reply simple, then translate if needed.
-    english_reply = (
-        f"I think this is a {clean_intent_name(intent)} request. "
-        "Please share a few more trip details."
-    )
+def build_reply(user_text: str, intent: str, target_lang: str, translator: Translator | None) -> str:
+    hint_intent = infer_intent_hint_from_text(user_text)
+    # If classifier returns broad flight intent, let keyword hint specialize the response.
+    if intent == "atis_flight" and hint_intent and hint_intent != "atis_flight":
+        effective_intent = hint_intent
+    elif intent in INTENT_REPLY_TEMPLATES:
+        effective_intent = intent
+    else:
+        effective_intent = hint_intent or intent
+
+    templates = INTENT_REPLY_TEMPLATES.get(effective_intent)
+    if templates:
+        # Keep variation deterministic for the same text, avoiding one repeated generic sentence.
+        stable_index = sum(ord(ch) for ch in user_text.strip().lower()) % len(templates)
+        english_reply = templates[stable_index]
+    else:
+        english_reply = (
+            f"I think this is a {clean_intent_name(intent)} request. "
+            "Please share a few more trip details."
+        )
 
     if translator is None or not target_lang or target_lang in {"en", "unknown"}:
         return english_reply
@@ -149,7 +218,7 @@ def main() -> None:
                 result = pipeline.run(user_text.strip())
                 detected_language = result.get("detection", {}).get("lang", "unknown")
                 predicted_intent = result.get("intent", "unknown")
-                reply_text = build_reply(predicted_intent, detected_language, pipeline.translator)
+                reply_text = build_reply(user_text.strip(), predicted_intent, detected_language, pipeline.translator)
                 st.session_state.messages.append({"role": "assistant", "content": reply_text})
 
             with st.expander("Last message details"):
@@ -217,7 +286,7 @@ def main() -> None:
                 live_result = pipeline.run(live_user_text.strip())
                 detected_language = live_result.get("detection", {}).get("lang", "unknown")
                 predicted_intent = live_result.get("intent", "unknown")
-                reply_text = build_reply(predicted_intent, detected_language, pipeline.translator)
+                reply_text = build_reply(live_user_text.strip(), predicted_intent, detected_language, pipeline.translator)
 
                 score_note = ""
                 if true_intent != "Skip scoring":
